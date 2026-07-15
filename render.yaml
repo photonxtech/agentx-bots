@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: photonx-rag-langchain
+    runtime: python
+    plan: free
+    region: oregon
+    branch: kalki
+    rootDir: photonx-bot/photonx-rag-langchain
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Must match .python-version in rootDir. On 3.13+ there is no prebuilt
+      # pydantic-core wheel, so pip compiles it from Rust and fails against
+      # Render's read-only cargo registry.
+      - key: PYTHON_VERSION
+        value: "3.12.11"
+      # Set in the Render dashboard — never commit the key.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4.1
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: CHROMA_DB
+        value: ./chroma_db
+      - key: CHROMA_COLLECTION
+        value: photonx_docs_lc
+      - key: DOCS_DIR
+        value: ./docs
+      - key: CHUNK_SIZE
+        value: "800"
+      - key: CHUNK_OVERLAP
+        value: "150"
+      - key: TOP_K
+        value: "5"
+      - key: LLM_TEMPERATURE
+        value: "0.0"
+      - key: LLM_MAX_TOKENS
+        value: "800"
+      - key: LOG_LEVEL
+        value: INFO
+      # Render's filesystem is ephemeral, so rebuild the index on each boot.
+      - key: INGEST_ON_STARTUP
+        value: "true"
+      # Add your deployed frontend origin here once it exists.
+      - key: CORS_ORIGINS
+        value: http://localhost:5173,http://127.0.0.1:5173

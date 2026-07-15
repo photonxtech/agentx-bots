@@ -60,6 +60,13 @@ class Settings(BaseSettings):
         description="Comma-separated allowed browser origins.",
     )
 
+    # --- Deployment ---
+    ingest_on_startup: bool = Field(
+        False,
+        description="Rebuild the vector index at boot if it is empty. "
+        "Enable on hosts with an ephemeral filesystem.",
+    )
+
     @property
     def cors_origin_list(self) -> list[str]:
         """Parse ``cors_origins`` into a clean list."""
