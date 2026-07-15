@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+
+# Vector store data
+chroma_db/
+
+# Docs are typically user-provided; keep the folder, ignore PDFs.
+docs/*.pdf
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhotonX RAG — Engineering Documentation</title>
+<style>
+  :root {
+    --paper: #f7f6f2;
+    --card: #ffffff;
+    --ink: #191c22;
+    --ink-soft: #3d434e;
+    --ink-faint: #6b7280;
+    --line: #e4e2da;
+    --line-strong: #d2cfc4;
+    --code-bg: #1c2027;
+    --code-ink: #d6dae2;
+    /* path accents */
+    --manual: #0c8ea3;      /* teal — no framework */
+    --manual-soft: #e2f2f4;
+    --lc: #6d51d6;          /* violet — langchain */
+    --lc-soft: #ece7fb;
+    /* semantic */
+    --good: #2e8a5c;
+    --warn: #b6802a;
+    --good-soft: #e4f2ea;
+    --warn-soft: #f6eddb;
+    --shadow: 0 1px 2px rgba(25,28,34,.04), 0 4px 16px rgba(25,28,34,.05);
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --mono: "SF Mono", ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #121419;
+      --card: #1a1d24;
+      --ink: #eef0f4;
+      --ink-soft: #c1c6d0;
+      --ink-faint: #8a91a0;
+      --line: #2a2e37;
+      --line-strong: #363b46;
+      --code-bg: #0e1116;
+      --code-ink: #cdd3dd;
+      --manual: #34b7cc;
+      --manual-soft: #10333a;
+      --lc: #a892f5;
+      --lc-soft: #241d3d;
+      --good: #5cc38c;
+      --warn: #e0b25c;
+      --good-soft: #143026;
+      --warn-soft: #33290f;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f7f6f2; --card: #ffffff; --ink: #191c22; --ink-soft: #3d434e;
+    --ink-faint: #6b7280; --line: #e4e2da; --line-strong: #d2cfc4;
+    --code-bg: #1c2027; --code-ink: #d6dae2;
+    --manual: #0c8ea3; --manual-soft: #e2f2f4; --lc: #6d51d6; --lc-soft: #ece7fb;
+    --good: #2e8a5c; --warn: #b6802a; --good-soft: #e4f2ea; --warn-soft: #f6eddb;
+    --shadow: 0 1px 2px rgba(25,28,34,.04), 0 4px 16px rgba(25,28,34,.05);
+  }
+  :root[data-theme="dark"] {
+    --paper: #121419; --card: #1a1d24; --ink: #eef0f4; --ink-soft: #c1c6d0;
+    --ink-faint: #8a91a0; --line: #2a2e37; --line-strong: #363b46;
+    --code-bg: #0e1116; --code-ink: #cdd3dd;
+    --manual: #34b7cc; --manual-soft: #10333a; --lc: #a892f5; --lc-soft: #241d3d;
+    --good: #5cc38c; --warn: #e0b25c; --good-soft: #143026; --warn-soft: #33290f;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- Masthead ---- */
+  header.top {
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--card), var(--paper));
+  }
+  .top-inner { padding: 56px 0 44px; }
+  .kicker {
+    font-size: .72rem; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600; margin: 0 0 18px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .kicker .dot { width: 7px; height: 7px; border-radius: 50%;
+    background: var(--manual); box-shadow: 12px 0 0 var(--lc); margin-right: 12px; }
+  h1.title {
+    font-family: var(--serif); font-weight: 600;
+    font-size: clamp(2.1rem, 5vw, 3.4rem); line-height: 1.08;
+    letter-spacing: -.02em; margin: 0 0 16px; text-wrap: balance;
+  }
+  .lede {
+    font-size: 1.12rem; color: var(--ink-soft); max-width: 62ch; margin: 0;
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 28px; margin-top: 30px; }
+  .legend .item { display: flex; align-items: center; gap: 9px;
+    font-size: .9rem; color: var(--ink-soft); font-weight: 500; }
+  .swatch { width: 14px; height: 14px; border-radius: 4px; }
+  .sw-manual { background: var(--manual); }
+  .sw-lc { background: var(--lc); }
+
+  /* ---- Layout with rail ---- */
+  .layout { display: grid; grid-template-columns: 232px 1fr; gap: 48px;
+    align-items: start; padding: 48px 0 96px; }
+  nav.rail { position: sticky; top: 24px; }
+  nav.rail ol { list-style: none; margin: 0; padding: 0; counter-reset: st; }
+  nav.rail a {
+    display: flex; gap: 12px; align-items: baseline; padding: 8px 0;
+    color: var(--ink-faint); text-decoration: none; font-size: .9rem;
+    border-left: 2px solid transparent; padding-left: 14px; margin-left: -16px;
+    transition: color .15s, border-color .15s;
+  }
+  nav.rail a .n { font-family: var(--mono); font-size: .74rem; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums; }
+  nav.rail a:hover { color: var(--ink); border-left-color: var(--line-strong); }
+  nav.rail .group-label { font-size: .68rem; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700; margin: 22px 0 6px 14px; }
+  nav.rail .group-label:first-child { margin-top: 0; }
+
+  main { min-width: 0; }
+  section.block { scroll-margin-top: 24px; margin-bottom: 72px; }
+  section.block:last-child { margin-bottom: 0; }
+
+  .eyebrow { font-family: var(--mono); font-size: .74rem; letter-spacing: .05em;
+    color: var(--ink-faint); text-transform: uppercase; margin: 0 0 8px;
+    font-variant-numeric: tabular-nums; }
+  h2 { font-family: var(--serif); font-weight: 600; font-size: 1.85rem;
+    letter-spacing: -.015em; margin: 0 0 4px; line-height: 1.15; text-wrap: balance; }
+  h3 { font-size: 1.08rem; font-weight: 650; margin: 32px 0 12px; letter-spacing: -.01em; }
+  p { margin: 0 0 16px; max-width: 68ch; color: var(--ink-soft); }
+  p strong, li strong { color: var(--ink); font-weight: 640; }
+  a.inline { color: var(--manual); text-decoration: none; border-bottom: 1px solid var(--line-strong); }
+
+  .prose ul { max-width: 68ch; color: var(--ink-soft); padding-left: 20px; margin: 0 0 16px; }
+  .prose li { margin-bottom: 7px; }
+
+  /* ---- Comparison two-col ---- */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 22px 0; }
+  .col {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px 20px 18px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+  }
+  .col::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .col.manual::before { background: var(--manual); }
+  .col.lc::before { background: var(--lc); }
+  .col .tag {
+    display: inline-flex; align-items: center; gap: 7px; font-size: .74rem; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; margin-bottom: 12px;
+  }
+  .col.manual .tag { color: var(--manual); }
+  .col.lc .tag { color: var(--lc); }
+  .col .tag::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .col h4 { margin: 0 0 8px; font-size: .98rem; font-weight: 650; color: var(--ink); }
+  .col p { font-size: .92rem; margin-bottom: 12px; }
+  .col p:last-child { margin-bottom: 0; }
+
+  /* ---- Code ---- */
+  .code-wrap { border-radius: 10px; overflow: hidden; border: 1px solid var(--line);
+    margin: 14px 0; box-shadow: var(--shadow); }
+  .code-head { background: var(--card); border-bottom: 1px solid var(--line);
+    padding: 8px 14px; font-family: var(--mono); font-size: .74rem; color: var(--ink-faint);
+    display: flex; justify-content: space-between; }
+  pre { margin: 0; background: var(--code-bg); color: var(--code-ink);
+    padding: 16px 18px; overflow-x: auto; font-family: var(--mono);
+    font-size: .82rem; line-height: 1.65; }
+  code { font-family: var(--mono); }
+  p code, li code, td code { background: var(--manual-soft); color: var(--ink);
+    padding: 1px 6px; border-radius: 5px; font-size: .84em; }
+  .tok-c { color: #7f8a9a; } /* comment */
+  .tok-k { color: #c792ea; } /* keyword */
+  .tok-s { color: #a3d99b; } /* string */
+  .tok-f { color: #82c8e0; } /* func */
+  .tok-p { color: #e0a878; } /* pipe/emphasis */
+
+  /* ---- Callout ---- */
+  .callout { border-radius: 10px; padding: 16px 18px; margin: 20px 0; font-size: .93rem;
+    border: 1px solid var(--line); background: var(--card); display: flex; gap: 13px; }
+  .callout .icn { flex-shrink: 0; width: 26px; height: 26px; border-radius: 7px;
+    display: grid; place-items: center; font-weight: 700; font-size: .9rem; }
+  .callout p { margin: 0; font-size: .93rem; }
+  .callout.good { background: var(--good-soft); border-color: transparent; }
+  .callout.good .icn { background: var(--good); color: #fff; }
+  .callout.warn { background: var(--warn-soft); border-color: transparent; }
+  .callout.warn .icn { background: var(--warn); color: #fff; }
+
+  /* ---- Tables ---- */
+  .tbl-wrap { overflow-x: auto; margin: 18px 0; border: 1px solid var(--line);
+    border-radius: 10px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; min-width: 520px; }
+  thead th { background: var(--card); text-align: left; font-weight: 650; color: var(--ink);
+    padding: 12px 16px; border-bottom: 2px solid var(--line-strong); font-size: .82rem;
+    letter-spacing: .02em; }
+  tbody td { padding: 11px 16px; border-bottom: 1px solid var(--line); color: var(--ink-soft);
+    vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: color-mix(in srgb, var(--card) 45%, transparent); }
+  .th-manual { color: var(--manual) !important; }
+  .th-lc { color: var(--lc) !important; }
+  .yes { color: var(--good); font-weight: 600; }
+  .no { color: var(--ink-faint); }
+
+  /* ---- Pipeline diagram ---- */
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 20px 0 8px; }
+  .flow .node { background: var(--card); border: 1px solid var(--line-strong); border-radius: 8px;
+    padding: 8px 12px; font-size: .82rem; font-weight: 600; color: var(--ink);
+    box-shadow: var(--shadow); }
+  .flow .arr { color: var(--ink-faint); font-size: .9rem; }
+
+  /* ---- Metric row ---- */
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px; margin: 22px 0; }
+  .metric { background: var(--card); border: 1px solid var(--line); border-radius: 11px;
+    padding: 18px; box-shadow: var(--shadow); }
+  .metric .big { font-family: var(--serif); font-size: 2rem; font-weight: 600;
+    letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .metric.m-manual .big { color: var(--manual); }
+  .metric.m-lc .big { color: var(--lc); }
+  .metric .lbl { font-size: .82rem; color: var(--ink-faint); margin-top: 8px; }
+
+  hr.rule { border: none; border-top: 1px solid var(--line); margin: 0; }
+
+  footer.foot { border-top: 1px solid var(--line); padding: 32px 0 48px;
+    color: var(--ink-faint); font-size: .85rem; }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 0; }
+    nav.rail { display: none; }
+    .compare { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <p class="kicker"><span class="dot"></span>PhotonX Technologies · RAG Engineering Reference</p>
+    <h1 class="title">Two ways to build the same Q&amp;A engine</h1>
+    <p class="lede">A complete, stage-by-stage guide to the PhotonX documentation assistant — built
+      once by hand, then rebuilt on LangChain. Every pipeline stage is explained once, then compared
+      side by side so you can see exactly what the framework replaces, and what it costs.</p>
+    <div class="legend">
+      <span class="item"><span class="swatch sw-manual"></span>Manual build — no framework</span>
+      <span class="item"><span class="swatch sw-lc"></span>LangChain build — framework</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <ol>
+        <div class="group-label">Overview</div>
+        <li><a href="#what"><span class="n">00</span><span>What is RAG</span></a></li>
+        <li><a href="#arch"><span class="n">01</span><span>Architecture</span></a></li>
+        <div class="group-label">Pipeline</div>
+        <li><a href="#load"><span class="n">02</span><span>PDF Loading</span></a></li>
+        <li><a href="#chunk"><span class="n">03</span><span>Chunking</span></a></li>
+        <li><a href="#embed"><span class="n">04</span><span>Embeddings</span></a></li>
+        <li><a href="#store"><span class="n">05</span><span>Vector Store</span></a></li>
+        <li><a href="#retrieve"><span class="n">06</span><span>Retrieval</span></a></li>
+        <li><a href="#prompt"><span class="n">07</span><span>Prompt &amp; LLM</span></a></li>
+        <div class="group-label">Wrap-up</div>
+        <li><a href="#guard"><span class="n">08</span><span>No Hallucination</span></a></li>
+        <li><a href="#verdict"><span class="n">09</span><span>Verdict</span></a></li>
+        <li><a href="#run"><span class="n">10</span><span>Run &amp; Test</span></a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <!-- WHAT -->
+      <section class="block prose" id="what">
+        <p class="eyebrow">00 · Overview</p>
+        <h2>What the application does</h2>
+        <p>Both applications answer plain-English questions using <strong>only</strong> the content of the
+          PhotonX documentation PDF, return <strong>citations</strong> to the exact page, and
+          <strong>never invent answers</strong>. If the answer isn't in the docs, they reply with a fixed sentence:</p>
+        <div class="code-wrap"><div class="code-head"><span>refusal contract</span></div>
+<pre>"I couldn't find that information in the PhotonX documentation."</pre></div>
+        <p>This pattern is called <strong>RAG — Retrieval-Augmented Generation</strong>. Instead of asking the
+          model to answer from memory (which causes hallucination), we first <em>retrieve</em> the relevant
+          passages from our own documents, then ask the model to answer using <em>only</em> those passages.</p>
+        <div class="flow">
+          <span class="node">Question</span><span class="arr">→</span>
+          <span class="node">Find relevant text</span><span class="arr">→</span>
+          <span class="node">Give it to the model</span><span class="arr">→</span>
+          <span class="node">Grounded answer + citations</span>
+        </div>
+        <h3>The two builds</h3>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual</span>
+            <h4>Built from scratch, no framework</h4>
+            <p>Every stage written by hand as a small, single-responsibility module. Maximum control and
+              understanding; more code to own.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain</span>
+            <h4>Rebuilt on the framework</h4>
+            <p>The same pipeline assembled from LangChain's ready-made components. Far less code; less control
+              over the internals.</p>
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <!-- ARCH -->
+      <section class="block prose" id="arch" style="margin-top:72px;">
+        <p class="eyebrow">01 · Structure</p>
+        <h2>Architecture &amp; folder layout</h2>
+        <p>Both projects share the <strong>same clean architecture</strong> — the framework only changes the
+          RAG internals, not how the app is organized. Keeping the structure identical isolates the one variable
+          we're studying: the pipeline.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Folder</th><th>Responsibility</th></tr></thead>
+            <tbody>
+              <tr><td><code>app/api/</code></td><td>Thin FastAPI routes — <code>/ingest</code>, <code>/ask</code>, <code>/health</code>, <code>/stats</code></td></tr>
+              <tr><td><code>app/core/</code></td><td>Config (from <code>.env</code>), logging, typed exceptions</td></tr>
+              <tr><td><code>app/rag/</code></td><td><strong>The pipeline</strong> — this is where the two builds differ</td></tr>
+              <tr><td><code>app/schemas/</code></td><td>Pydantic request/response models</td></tr>
+              <tr><td><code>app/services/</code></td><td>Orchestration + dependency-injection container</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The difference lives entirely in <code>app/rag/</code>:</p>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual · app/rag/</span>
+            <p><code>pdf_loader.py</code> · <code>chunker.py</code> · <code>embedding.py</code> ·
+              <code>vector_store.py</code> · <code>retriever.py</code> · <code>prompt.py</code> ·
+              <code>llm.py</code></p>
+            <p style="color:var(--ink-faint);font-size:.86rem;">Seven modules — one per pipeline stage.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain · app/rag/</span>
+            <p><code>pipeline.py</code> · <code>prompt.py</code></p>
+            <p style="color:var(--ink-faint);font-size:.86rem;">Two modules — the framework supplies the stages.</p>
+          </div>
+        </div>
+        <div class="metrics">
+          <div class="metric m-manual"><div class="big">732</div><div class="lbl">lines of RAG code (manual, 7 files)</div></div>
+          <div class="metric m-lc"><div class="big">260</div><div class="lbl">lines of RAG code (LangChain, 1 file)</div></div>
+          <div class="metric"><div class="big">~64%</div><div class="lbl">less pipeline code with the framework</div></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <!-- LOAD -->
+      <section class="block prose" id="load" style="margin-top:72px;">
+        <p class="eyebrow">02 · Stage one</p>
+        <h2>PDF Loading</h2>
+        <p><strong>Job:</strong> read the PDF, pull out the text page by page, and remember which page each
+          piece came from — that page number becomes the citation later.</p>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual</span>
+            <h4>Custom <code>PDFLoader</code> (pypdf)</h4>
+            <p>Loops over pages, extracts text, skips blank pages, raises a clear error on a scanned/empty PDF.
+              Wrapped behind a <code>DocumentLoader</code> protocol so Word/HTML loaders can be added later
+              without touching anything downstream.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain</span>
+            <h4><code>PyPDFLoader</code></h4>
+            <p>One import. <code>PyPDFLoader(path).load()</code> returns a list of <code>Document</code> objects,
+              one per page, with the page number already in <code>metadata</code>.</p>
+          </div>
+        </div>
+        <div class="code-wrap"><div class="code-head"><span>LangChain — the whole loader</span><span>pipeline.py</span></div>
+<pre><span class="tok-k">from</span> langchain_community.document_loaders <span class="tok-k">import</span> PyPDFLoader
+pages = <span class="tok-f">PyPDFLoader</span>(<span class="tok-s">str(path)</span>).<span class="tok-f">load</span>()  <span class="tok-c"># one Document per page</span></pre></div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Alternatives</th><th>When you'd use it</th></tr></thead>
+          <tbody>
+            <tr><td><code>pdfplumber</code></td><td>Complex tables / precise layout (slower)</td></tr>
+            <tr><td><code>PyMuPDF</code></td><td>Speed on large volumes</td></tr>
+            <tr><td>OCR (Tesseract)</td><td>Scanned / image-only PDFs</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>Why pypdf:</strong> lightweight and reliable for text-based PDFs. The PhotonX profile is real
+          text, not scanned, so OCR isn't needed.</p>
+      </section>
+
+      <hr class="rule">
+
+      <!-- CHUNK -->
+      <section class="block prose" id="chunk" style="margin-top:72px;">
+        <p class="eyebrow">03 · Stage two</p>
+        <h2>Chunking</h2>
+        <p><strong>Job:</strong> a whole document is too big to feed the model at once, so we split it into small
+          pieces. Both builds use <strong>800 characters per chunk with 150 characters of overlap</strong> — the
+          <em>size</em> is identical. The <em>strategy</em> is where they diverge.</p>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual</span>
+            <h4>Heading-aware + footer-stripping</h4>
+            <p>Strips repeated page boilerplate (company name, URL, "Page 3"), detects real section headings,
+              and tags each chunk with a <code>section</code> label. Breaks on sentence boundaries.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain</span>
+            <h4><code>RecursiveCharacterTextSplitter</code></h4>
+            <p>Splits on a priority list of separators — paragraphs → lines → sentences → words — using the
+              biggest one that keeps chunks under the size limit. Structure-agnostic; no section labels.</p>
+          </div>
+        </div>
+        <div class="code-wrap"><div class="code-head"><span>LangChain — the whole chunker</span><span>pipeline.py</span></div>
+<pre>splitter = <span class="tok-f">RecursiveCharacterTextSplitter</span>(
+    chunk_size=<span class="tok-p">800</span>, chunk_overlap=<span class="tok-p">150</span>,
+    separators=[<span class="tok-s">"\n\n"</span>, <span class="tok-s">"\n"</span>, <span class="tok-s">". "</span>, <span class="tok-s">" "</span>, <span class="tok-s">""</span>],
+)
+chunks = splitter.<span class="tok-f">split_documents</span>(pages)</pre></div>
+        <div class="callout warn"><div class="icn">!</div>
+          <p>This stage caused a <strong>real bug in the manual build</strong>: repeated page footers were being
+            treated as content, so valid questions returned "not found". The fix — footer-stripping + heading
+            awareness — cut 62 junk chunks down to 14 clean ones. LangChain's generic splitter doesn't do this
+            out of the box; matching it means writing a custom splitter, which starts undoing the code savings.</p>
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Chunking type</th><th>Trade-off</th></tr></thead>
+          <tbody>
+            <tr><td>Fixed-size</td><td>Simplest; cuts mid-sentence</td></tr>
+            <tr><td>Recursive character <span style="color:var(--lc);font-weight:600;">(LangChain)</span></td><td>Respects paragraph/sentence boundaries</td></tr>
+            <tr><td>Heading-aware <span style="color:var(--manual);font-weight:600;">(manual)</span></td><td>Best metadata; most code</td></tr>
+            <tr><td>Semantic</td><td>Splits by meaning shift; smart but costly</td></tr>
+            <tr><td>Token-based</td><td>Fits model token limits exactly</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <hr class="rule">
+
+      <!-- EMBED -->
+      <section class="block prose" id="embed" style="margin-top:72px;">
+        <p class="eyebrow">04 · Stage three</p>
+        <h2>Embeddings</h2>
+        <p><strong>Job:</strong> convert each chunk into a <strong>vector</strong> — a list of 1536 numbers that
+          captures its meaning. Chunks about similar topics get similar numbers, which is what makes
+          <em>search by meaning</em> possible. Both builds use OpenAI's <code>text-embedding-3-small</code>.</p>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual</span>
+            <h4>Hand-written <code>Embedder</code></h4>
+            <p>Batches up to 128 chunks per call, retries with exponential backoff on failure, and preserves
+              input order. ~90 lines of production reliability code.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain</span>
+            <h4><code>OpenAIEmbeddings</code></h4>
+            <p>One class. Batching, retries, and ordering are all handled inside it. One line.</p>
+          </div>
+        </div>
+        <div class="code-wrap"><div class="code-head"><span>LangChain — batching &amp; retries included</span><span>pipeline.py</span></div>
+<pre>self._embeddings = <span class="tok-f">OpenAIEmbeddings</span>(model=<span class="tok-s">"text-embedding-3-small"</span>)</pre></div>
+        <div class="callout good"><div class="icn">✓</div>
+          <p>The <strong>same model embeds both the chunks (at ingest) and the question (at query time)</strong>,
+            so their vectors live in the same space and can be compared directly. That comparison is how
+            "Who started the company?" matches a chunk saying "co-founders" — no shared keyword required.</p>
+        </div>
+        <p><strong>Why 3-small over 3-large:</strong> best cost/quality balance. It's accurate enough for
+          document Q&amp;A and much cheaper — <code>large</code> would be overkill for a company profile.</p>
+      </section>
+
+      <hr class="rule">
+
+      <!-- STORE -->
+      <section class="block prose" id="store" style="margin-top:72px;">
+        <p class="eyebrow">05 · Stage four</p>
+        <h2>Vector Store</h2>
+        <p><strong>Job:</strong> save all the vectors and, given a new query vector, find the most similar ones
+          fast. Both builds use <strong>ChromaDB</strong> with <strong>cosine similarity</strong>, persisted to
+          disk so ingestion happens once.</p>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual</span>
+            <h4>Custom <code>VectorStore</code> wrapper</h4>
+            <p>Directly opens a persistent Chroma client, upserts chunk text + embeddings + metadata, converts
+              cosine distance into a clean 0–1 similarity score.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain</span>
+            <h4><code>Chroma</code> (langchain-chroma)</h4>
+            <p>The store and the embedding function are wired together in the constructor. <code>add_documents()</code>
+              embeds and stores in a single call.</p>
+          </div>
+        </div>
+        <div class="code-wrap"><div class="code-head"><span>LangChain — store wired to embeddings</span><span>pipeline.py</span></div>
+<pre>self._store = <span class="tok-f">Chroma</span>(
+    collection_name=<span class="tok-s">"photonx_docs_lc"</span>,
+    embedding_function=self._embeddings,
+    persist_directory=<span class="tok-s">"./chroma_db"</span>,
+    collection_metadata={<span class="tok-s">"hnsw:space"</span>: <span class="tok-s">"cosine"</span>},
+)</pre></div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Alternatives</th><th>When you'd use it</th></tr></thead>
+          <tbody>
+            <tr><td>FAISS</td><td>Fast in-memory search, no metadata filtering</td></tr>
+            <tr><td>Pinecone / Weaviate</td><td>Managed, cloud-scale (paid)</td></tr>
+            <tr><td>pgvector</td><td>You already run PostgreSQL</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>Why Chroma:</strong> runs locally, persists to disk, zero infrastructure setup, and stores
+          metadata (page, section) needed for citations — ideal for a self-contained app.</p>
+      </section>
+
+      <hr class="rule">
+
+      <!-- RETRIEVE -->
+      <section class="block prose" id="retrieve" style="margin-top:72px;">
+        <p class="eyebrow">06 · Stage five</p>
+        <h2>Retrieval</h2>
+        <p><strong>Job:</strong> embed the incoming question, then pull the <strong>top 5</strong> chunks whose
+          vectors are closest to it by cosine similarity.</p>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual</span>
+            <h4>Custom <code>Retriever</code></h4>
+            <p>Composes the embedder + store, sorts results by score, returns text/page/section/score. A clean
+              seam where a re-ranker or hybrid search would slot in later.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain</span>
+            <h4><code>store.as_retriever(...)</code></h4>
+            <p>One method turns the store into a configured retriever.</p>
+          </div>
+        </div>
+        <div class="code-wrap"><div class="code-head"><span>LangChain — the whole retriever</span><span>pipeline.py</span></div>
+<pre>self._retriever = self._store.<span class="tok-f">as_retriever</span>(
+    search_type=<span class="tok-s">"similarity"</span>, search_kwargs={<span class="tok-s">"k"</span>: <span class="tok-p">5</span>},
+)</pre></div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Retrieval approach</th><th>Trade-off</th></tr></thead>
+          <tbody>
+            <tr><td>Vector / cosine <span style="color:var(--ink-faint);">(both use this)</span></td><td>Matches meaning, misses exact rare terms</td></tr>
+            <tr><td>Keyword (BM25)</td><td>Exact word match, misses synonyms</td></tr>
+            <tr><td>Hybrid</td><td>Combines both — best coverage</td></tr>
+            <tr><td>+ Re-ranking</td><td>Second model reorders for precision</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <hr class="rule">
+
+      <!-- PROMPT -->
+      <section class="block prose" id="prompt" style="margin-top:72px;">
+        <p class="eyebrow">07 · Stage six &amp; seven</p>
+        <h2>Prompt &amp; LLM</h2>
+        <p><strong>Job:</strong> hand the retrieved chunks to the model with strict instructions, then generate
+          the answer. Both use <code>gpt-4.1</code> at <strong>temperature 0</strong> (factual, deterministic,
+          no creative drift).</p>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Manual</span>
+            <h4>Hand-built prompt + <code>qa_service.py</code></h4>
+            <p>String-built system/user prompts, then a service that orchestrates retrieve → prompt → call →
+              parse → cite, step by step in plain Python.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">LangChain</span>
+            <h4><code>ChatPromptTemplate</code> + LCEL chain</h4>
+            <p>The whole orchestration collapses into one composed chain using the <code>|</code> pipe operator.</p>
+          </div>
+        </div>
+        <div class="code-wrap"><div class="code-head"><span>LangChain — LCEL: the entire orchestration</span><span>pipeline.py</span></div>
+<pre>chain = (
+    {<span class="tok-s">"context"</span>: retrieve_and_format, <span class="tok-s">"question"</span>: <span class="tok-f">RunnablePassthrough</span>()}
+    <span class="tok-p">|</span> prompt          <span class="tok-c"># ChatPromptTemplate</span>
+    <span class="tok-p">|</span> llm             <span class="tok-c"># ChatOpenAI</span>
+    <span class="tok-p">|</span> <span class="tok-f">StrOutputParser</span>()
+)
+answer = chain.<span class="tok-f">invoke</span>(<span class="tok-s">"What services does PhotonX provide?"</span>)</pre></div>
+        <div class="callout good"><div class="icn">✓</div>
+          <p><strong>LCEL</strong> (LangChain Expression Language) is the <code>a | b | c</code> syntax that wires
+            steps into one runnable. That single <code>chain.invoke(...)</code> runs retrieve → format → prompt →
+            model → parse. In the manual build, that flow <em>was</em> the entire <code>qa_service.py</code>.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <!-- GUARD -->
+      <section class="block prose" id="guard" style="margin-top:72px;">
+        <p class="eyebrow">08 · The guarantee</p>
+        <h2>How it never hallucinates</h2>
+        <p>Both builds enforce the <strong>same three-layer defense</strong> — the framework did not weaken the
+          safety contract, because we kept this logic ourselves in both.</p>
+        <div class="prose"><ul>
+          <li><strong>Strict prompt.</strong> The system prompt forbids outside knowledge and mandates the exact
+            refusal sentence when the answer isn't in context.</li>
+          <li><strong>Empty-retrieval short-circuit.</strong> If nothing relevant is retrieved, we return the
+            refusal <em>without even calling the model</em>.</li>
+          <li><strong>Citations from retrieval, never from text.</strong> Sources are built from the retrieved
+            chunks — so a citation can never be fabricated by the model.</li>
+        </ul></div>
+      </section>
+
+      <hr class="rule">
+
+      <!-- VERDICT -->
+      <section class="block prose" id="verdict" style="margin-top:72px;">
+        <p class="eyebrow">09 · Comparison</p>
+        <h2>The verdict</h2>
+        <p>Both apps were run against the same PDF and the same questions. Both answer correctly and both refuse
+          out-of-scope questions safely. Here's where they genuinely differ.</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Dimension</th><th class="th-manual">Manual (no framework)</th><th class="th-lc">LangChain</th></tr></thead>
+          <tbody>
+            <tr><td>RAG pipeline code</td><td>732 lines · 7 files</td><td>260 lines · 1 file</td></tr>
+            <tr><td>Embedding batching / retries</td><td>Hand-written</td><td class="yes">Built in</td></tr>
+            <tr><td>Chunking control</td><td class="yes">Full — footer-strip, heading-aware</td><td>Generic, size-based</td></tr>
+            <tr><td>Citation metadata</td><td class="yes">document · page · <strong>section</strong></td><td>document · page · <span class="no">section = N/A</span></td></tr>
+            <tr><td>Swap model / provider</td><td>Rewrite a class</td><td class="yes">Swap one class</td></tr>
+            <tr><td>Dependencies</td><td class="yes">Lean</td><td>Heavy tree</td></tr>
+            <tr><td>Debuggability</td><td class="yes">See every step</td><td>More indirection</td></tr>
+            <tr><td>Time to build</td><td>Slower</td><td class="yes">Fast</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout warn"><div class="icn">i</div>
+          <p><strong>An honest surprise from testing:</strong> on "What services does PhotonX provide?", the two
+            chunkers split the PDF differently and <em>LangChain happened to retrieve a better answer</em> (the
+            full page-2 service list, where the manual build surfaced a page-1 summary). Neither chunker is
+            universally right — <strong>chunking strategy is a tuning lever, not a solved problem.</strong></p>
+        </div>
+        <div class="compare">
+          <div class="col manual">
+            <span class="tag">Choose manual when</span>
+            <p>Retrieval <em>quality</em> on your specific documents is the priority: you need footer control,
+              heading-aware chunking, rich metadata, and full visibility to debug why a result appeared.</p>
+          </div>
+          <div class="col lc">
+            <span class="tag">Choose LangChain when</span>
+            <p>Speed and breadth matter: rapid prototyping, easy provider/store swaps, and built-in features
+              (streaming, memory, agents) you'd otherwise write yourself.</p>
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <!-- RUN -->
+      <section class="block prose" id="run" style="margin-top:72px;">
+        <p class="eyebrow">10 · Operate</p>
+        <h2>Running &amp; testing both</h2>
+        <p>They run side by side — manual on port <strong>8000</strong>, LangChain on <strong>8001</strong>, each
+          with its own Chroma collection so the indexes never collide.</p>
+        <div class="code-wrap"><div class="code-head"><span>ingest, then ask</span><span>terminal</span></div>
+<pre><span class="tok-c"># 1 — index the PDFs (run once)</span>
+curl -X POST http://localhost:8000/ingest
+
+<span class="tok-c"># 2 — ask a question</span>
+curl -X POST http://localhost:8000/ask \
+  -H <span class="tok-s">"Content-Type: application/json"</span> \
+  -d <span class="tok-s">'{"question": "What services does PhotonX provide?"}'</span></pre></div>
+        <h3>Questions that demo each behavior</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Ask this</th><th>Shows</th></tr></thead>
+          <tbody>
+            <tr><td>What services does PhotonX provide?</td><td><span class="yes">Answers + cites a page</span></td></tr>
+            <tr><td>Who founded PhotonX?</td><td><span class="yes">Precise page-6 citation</span></td></tr>
+            <tr><td>What do clients say about PhotonX?</td><td><span class="yes">Testimonials, cited</span></td></tr>
+            <tr><td>What is the capital of France?</td><td>Refuses — proves no hallucination</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>Best demo sequence:</strong> ask services → ask founders → ask capital of France. That proves
+          the three things that matter — it <em>answers</em>, it <em>cites</em>, and it <em>refuses</em> rather
+          than making something up.</p>
+      </section>
+    </main>
+  </div>
+</div>
+
+<footer class="foot">
+  <div class="wrap">PhotonX Technologies · RAG engineering reference · Manual build vs. LangChain build ·
+    Both apps verified end-to-end against the PhotonX company profile PDF.</div>
+</footer>
+
+</body>
+</html>

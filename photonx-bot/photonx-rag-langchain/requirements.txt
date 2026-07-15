@@ -1,0 +1,27 @@
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# --- Data validation & settings ---
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# --- LangChain (the framework we're learning) ---
+# langchain          : core abstractions (chains, runnables, prompts)
+# langchain-openai   : OpenAI chat + embeddings integration
+# langchain-chroma   : Chroma vector store integration
+# langchain-community: community loaders (PyPDFLoader lives here)
+langchain==0.3.14
+langchain-openai==0.2.14
+langchain-chroma==0.1.4
+langchain-community==0.3.14
+
+# --- PDF parsing (used by LangChain's PyPDFLoader under the hood) ---
+pypdf==5.1.0
+
+# --- DOCX parsing (used by LangChain's Docx2txtLoader under the hood) ---
+docx2txt==0.8
+
+# --- Keyword (BM25) retrieval for the hybrid retriever ---
+rank-bm25==0.2.2
