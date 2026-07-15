@@ -26,7 +26,28 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """Warm the container on startup so config/DB errors surface immediately."""
     logger.info("Starting PhotonX RAG API...")
-    get_container()  # fail fast on misconfiguration
+    container = get_container()  # fail fast on misconfiguration
+
+    # Hosts with an ephemeral filesystem (Render, Fly, containers generally)
+    # lose chroma_db on every deploy and restart, so the index must be rebuilt
+    # from ./docs at boot. Skipped when vectors are already present so a
+    # persistent disk — or a local dev run — doesn't pay to re-embed.
+    if get_settings().ingest_on_startup:
+        try:
+            if container.vector_store.count() > 0:
+                logger.info("Vector store already populated; skipping ingest.")
+            else:
+                documents, chunks = container.ingestion_service.ingest()
+                logger.info(
+                    "Startup ingest complete: %d documents, %d chunks",
+                    documents,
+                    chunks,
+                )
+        except Exception:
+            # A failed ingest must not stop the service from booting: /health
+            # and the chat persona still work, and /ingest can be retried.
+            logger.exception("Startup ingest failed; continuing without it.")
+
     yield
     logger.info("Shutting down PhotonX RAG API.")
 
