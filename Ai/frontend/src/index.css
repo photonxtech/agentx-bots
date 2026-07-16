@@ -1,0 +1,17 @@
+body {
+  margin: 0;
+}
+
+@media (max-width: 480px) {
+  .chat-window-container {
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+  }
+  .chat-window-container .MuiPaper-root {
+    border-radius: 0 !important;
+  }
+}
