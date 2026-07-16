@@ -28,7 +28,7 @@ HYBRID_ALPHA = 0.65
 # "weaviate" -> self-hosted Weaviate (see docker-compose.yml); "chroma" -> the
 # original embedded ChromaDB. If Weaviate is selected but unreachable at
 # startup, the app automatically falls back to Chroma so nothing breaks.
-VECTOR_BACKEND = "weaviate"
+VECTOR_BACKEND = "chroma"
 
 # --- Weaviate connection (only used when VECTOR_BACKEND == "weaviate") ---
 # Matches the ports published in docker-compose.yml. We supply our own vectors
