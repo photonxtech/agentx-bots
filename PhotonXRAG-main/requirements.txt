@@ -1,0 +1,9 @@
+python-dotenv
+python-docx
+langchain-text-splitters
+chromadb
+sentence-transformers
+tiktoken
+rank_bm25
+groq
+streamlit
