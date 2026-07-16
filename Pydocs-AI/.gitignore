@@ -1,0 +1,24 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- virtual envs ---
+venv312/
+venv/
+.venv/
+env/
+
+# --- secrets ---
+.env
+
+# --- built vector store (rebuildable from python-docs/, do not commit) ---
+faiss_store_pydocs/
+chroma_store_pydocs/
+
+# --- downloaded model weights (re-downloaded on demand) ---
+fastembed_cache/
+
+# --- persistent chat history (local runtime state) ---
+chat_sessions/
