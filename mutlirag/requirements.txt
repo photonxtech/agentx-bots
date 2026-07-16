@@ -1,0 +1,38 @@
+# --- Frontend ---
+streamlit>=1.37
+
+# --- LLM generation (Groq) ---
+groq>=0.11
+python-dotenv>=1.0
+
+# --- Embeddings (local, free, no API key) ---
+sentence-transformers>=3.0
+
+# --- Retrieval (hybrid: NumPy cosine + BM25 keyword) ---
+rank-bm25>=0.2
+
+# --- Excel/CSV ingestion ---
+pandas>=2.2
+openpyxl>=3.1
+
+# --- Image OCR ---
+easyocr>=1.7
+Pillow>=10.0
+
+# --- PDF (text extraction + render-to-image for scanned pages) ---
+pymupdf>=1.24
+
+# --- Word .docx (text + tables + embedded images) ---
+python-docx>=1.1
+
+# --- PowerPoint .pptx (slides + tables + embedded images) ---
+python-pptx>=1.0
+
+# --- Vector DB ---
+# Weaviate is the default backend (self-hosted via docker-compose.yml).
+weaviate-client>=4.9,<5
+# Chroma kept as an automatic fallback if Weaviate is unreachable.
+chromadb>=0.5.0
+
+# --- Utils ---
+numpy>=1.26

@@ -1,0 +1,14 @@
+# Secrets — never commit API keys
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Generated at runtime
+index_store/
+extracted_images/
+
+# OS noise
+.DS_Store

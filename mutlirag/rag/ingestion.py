@@ -1,0 +1,384 @@
+"""Ingestion: turn uploaded Excel files and images into plain text.
+
+Each source becomes a list of `Document` records. A Document is just a piece of
+text plus metadata (where it came from) so we can cite sources in answers.
+"""
+
+from __future__ import annotations
+
+import io
+import os
+from dataclasses import dataclass, field
+
+import config
+
+
+@dataclass
+class Document:
+    """A unit of ingested text with provenance."""
+    text: str
+    source: str                       # filename
+    kind: str                         # "image" | "pdf" | "docx" | "pptx" | "text"
+    meta: dict = field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------- #
+# Plain text / Markdown
+# --------------------------------------------------------------------------- #
+def load_text(file_bytes: bytes, filename: str) -> list[Document]:
+    """Read a .txt/.md file as one Document; chunking will split it later."""
+    text = file_bytes.decode("utf-8", errors="replace").strip()
+    if not text:
+        return []
+    return [
+        Document(
+            text=f"[File: {filename}]\n{text}",
+            source=filename,
+            kind="text",
+            meta={"chars": len(text)},
+        )
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Images (OCR)
+# --------------------------------------------------------------------------- #
+# EasyOCR loads a model into memory; do it lazily and only once.
+_ocr_reader = None
+
+
+def _get_ocr_reader():
+    global _ocr_reader
+    if _ocr_reader is None:
+        import easyocr  # imported lazily so the app starts fast
+
+        _ocr_reader = easyocr.Reader(config.OCR_LANGUAGES, gpu=False, verbose=False)
+    return _ocr_reader
+
+
+def _ocr_pil_image(image) -> str:
+    """OCR a PIL image -> text. The single place OCR actually runs, so images
+    from files, embedded PDF images, and rendered PDF pages all share it."""
+    import numpy as np
+
+    reader = _get_ocr_reader()
+    # detail=0 -> just the strings, in reading order.
+    lines = reader.readtext(np.array(image.convert("RGB")), detail=0, paragraph=True)
+    return "\n".join(lines).strip()
+
+
+def _extract_image_text(image) -> str:
+    """Everything we can learn from one PIL image: OCR text + a vision-model
+    description. The single shared path for uploaded images, embedded PDF/DOCX
+    images, and rendered scanned pages. Vision failures degrade to OCR-only."""
+    from rag import vision
+
+    parts = [_ocr_pil_image(image)]
+    desc = vision.describe_image(image)
+    if desc:
+        parts.append(f"[Visual description] {desc}")
+    return "\n".join(p for p in parts if p).strip()
+
+
+def load_image(file_bytes: bytes, filename: str) -> list[Document]:
+    """Extract OCR text + a vision description from an image as one Document."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(file_bytes))
+    text = _extract_image_text(image)
+
+    if not text:
+        return []
+
+    return [
+        Document(
+            text=f"[Image: {filename}]\n{text}",
+            source=filename,
+            kind="image",
+            meta={"chars": len(text)},
+        )
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# PDF — hybrid: text layer + OCR of embedded images (both combined per page)
+# --------------------------------------------------------------------------- #
+def _safe_stem(filename: str) -> str:
+    """Filesystem-safe stem for naming extracted image files."""
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    return "".join(c if c.isalnum() else "_" for c in stem) or "pdf"
+
+
+def load_pdf(file_bytes: bytes, filename: str) -> list[Document]:
+    """Extract each PDF page as one Document, combining BOTH sources of text:
+
+    1. The page's text layer (fast, accurate) — for normal typed paragraphs.
+    2. OCR of every embedded image on the page — so words baked into charts,
+       screenshots, logos, or scans aren't lost on otherwise-text pages.
+
+    Embedded images are also saved to disk (config.EXTRACTED_IMAGES_DIR) so they
+    can later be fed to a vision model. If a page has neither a usable text
+    layer nor embedded images, we render the whole page and OCR that.
+
+    One Document per page keeps citations page-precise.
+    """
+    import fitz  # PyMuPDF, imported lazily
+
+    os.makedirs(config.EXTRACTED_IMAGES_DIR, exist_ok=True)
+    stem = _safe_stem(filename)
+
+    docs: list[Document] = []
+    pdf = fitz.open(stream=file_bytes, filetype="pdf")
+
+    for page_num, page in enumerate(pdf, 1):
+        text = page.get_text("text").strip()
+
+        # --- OCR + save every embedded image on this page ---
+        image_texts: list[str] = []
+        saved_paths: list[str] = []
+        for img_i, img in enumerate(page.get_images(full=True), 1):
+            xref = img[0]
+            saved, ocr_text = _handle_embedded_image(pdf, xref, stem, page_num, img_i)
+            if saved:
+                saved_paths.append(saved)
+            if ocr_text:
+                image_texts.append(f"[Embedded image {img_i}] {ocr_text}")
+
+        # --- fully-scanned page fallback: no text AND no embedded images ---
+        rendered_ocr = ""
+        if len(text) < config.PDF_OCR_MIN_CHARS and not image_texts:
+            rendered_ocr = _ocr_pdf_page(page)
+
+        combined = "\n".join(p for p in [text, *image_texts, rendered_ocr] if p).strip()
+        if not combined:
+            continue
+
+        used_ocr = bool(image_texts or rendered_ocr)
+        docs.append(
+            Document(
+                text=f"[PDF: {filename}, Page: {page_num}]\n{combined}",
+                source=filename,
+                kind="pdf",
+                meta={"page": page_num, "ocr": used_ocr, "images": saved_paths},
+            )
+        )
+
+    pdf.close()
+    return docs
+
+
+def _save_and_ocr_image(img_bytes: bytes, ext: str, basename: str) -> tuple[str | None, str]:
+    """Save one embedded image to disk, then OCR + vision-describe it. Shared
+    by PDF and DOCX.
+
+    Returns (saved_path_or_None, extracted_text). Failures are swallowed so one
+    bad image (exotic codec, CMYK, etc.) never aborts ingestion of the whole
+    file. Tiny images (logos/icons/rules) are skipped as noise.
+    """
+    from PIL import Image
+
+    try:
+        image = Image.open(io.BytesIO(img_bytes))
+        if image.width * image.height < config.MIN_EMBEDDED_IMAGE_AREA:
+            return None, ""
+
+        path = os.path.join(config.EXTRACTED_IMAGES_DIR, f"{basename}.{ext}")
+        with open(path, "wb") as f:
+            f.write(img_bytes)
+
+        return path, _extract_image_text(image)
+    except Exception:
+        return None, ""
+
+
+def _handle_embedded_image(pdf, xref, stem, page_num, img_i) -> tuple[str | None, str]:
+    """Pull one embedded image out of a PDF by xref, then save + OCR it."""
+    try:
+        base = pdf.extract_image(xref)          # raw bytes in original format
+        return _save_and_ocr_image(
+            base["image"], base.get("ext", "png"), f"{stem}_p{page_num}_img{img_i}"
+        )
+    except Exception:
+        return None, ""
+
+
+def _ocr_pdf_page(page) -> str:
+    """Render a whole PyMuPDF page to an image, then OCR + vision-describe it
+    (scanned-page path)."""
+    import fitz
+    from PIL import Image
+
+    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom => sharper OCR
+    image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    return _extract_image_text(image)
+
+
+# --------------------------------------------------------------------------- #
+# Word .docx — paragraphs + tables + OCR of embedded images
+# --------------------------------------------------------------------------- #
+def load_docx(file_bytes: bytes, filename: str) -> list[Document]:
+    """Extract a Word document as one Document, combining:
+
+    1. Paragraph text.
+    2. Table cells (flattened row by row as "cell | cell | ...").
+    3. OCR of every embedded image (charts/screenshots), which is also saved
+       to disk for later vision-model use.
+
+    Chunking splits the combined text later, so we return a single Document.
+    """
+    import docx  # python-docx, imported lazily
+
+    os.makedirs(config.EXTRACTED_IMAGES_DIR, exist_ok=True)
+    stem = _safe_stem(filename)
+
+    doc = docx.Document(io.BytesIO(file_bytes))
+    parts: list[str] = []
+
+    for para in doc.paragraphs:
+        if para.text.strip():
+            parts.append(para.text.strip())
+
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+
+    # Embedded images live as related parts keyed by relationship.
+    saved_paths: list[str] = []
+    img_i = 0
+    for rel in doc.part.rels.values():
+        if "image" not in rel.reltype:
+            continue
+        img_i += 1
+        try:
+            blob = rel.target_part.blob
+            ext = (rel.target_part.content_type.split("/")[-1] or "png").replace("jpeg", "jpg")
+            saved, ocr_text = _save_and_ocr_image(blob, ext, f"{stem}_img{img_i}")
+        except Exception:
+            saved, ocr_text = None, ""
+        if saved:
+            saved_paths.append(saved)
+        if ocr_text:
+            parts.append(f"[Embedded image {img_i}] {ocr_text}")
+
+    combined = "\n".join(parts).strip()
+    if not combined:
+        return []
+
+    return [
+        Document(
+            text=f"[DOCX: {filename}]\n{combined}",
+            source=filename,
+            kind="docx",
+            meta={"ocr": bool(saved_paths), "images": saved_paths},
+        )
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# PowerPoint .pptx — one Document per slide (text + tables + image OCR/vision)
+# --------------------------------------------------------------------------- #
+def load_pptx(file_bytes: bytes, filename: str) -> list[Document]:
+    """Extract each slide as one Document: text frames, tables (flattened
+    row by row), and embedded pictures (saved + OCR'd + vision-described)."""
+    from pptx import Presentation  # python-pptx, imported lazily
+
+    os.makedirs(config.EXTRACTED_IMAGES_DIR, exist_ok=True)
+    stem = _safe_stem(filename)
+
+    prs = Presentation(io.BytesIO(file_bytes))
+    docs: list[Document] = []
+
+    for slide_num, slide in enumerate(prs.slides, 1):
+        parts: list[str] = []
+        saved_paths: list[str] = []
+        img_i = 0
+
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                parts.append(shape.text_frame.text.strip())
+            if getattr(shape, "has_table", False) and shape.has_table:
+                for row in shape.table.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        parts.append(" | ".join(cells))
+            if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
+                img_i += 1
+                try:
+                    blob = shape.image.blob
+                    ext = shape.image.ext or "png"
+                    saved, img_text = _save_and_ocr_image(
+                        blob, ext, f"{stem}_s{slide_num}_img{img_i}"
+                    )
+                except Exception:
+                    saved, img_text = None, ""
+                if saved:
+                    saved_paths.append(saved)
+                if img_text:
+                    parts.append(f"[Embedded image {img_i}] {img_text}")
+
+        combined = "\n".join(parts).strip()
+        if not combined:
+            continue
+        docs.append(
+            Document(
+                text=f"[PPTX: {filename}, Slide: {slide_num}]\n{combined}",
+                source=filename,
+                kind="pptx",
+                meta={"slide": slide_num, "images": saved_paths},
+            )
+        )
+    return docs
+
+
+def ingest(file_bytes: bytes, filename: str) -> list[Document]:
+    """Dispatch a single uploaded file to the right loader by extension."""
+    lower = filename.lower()
+    if lower.endswith((".txt", ".md")):
+        return load_text(file_bytes, filename)
+    if lower.endswith((".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp")):
+        return load_image(file_bytes, filename)
+    if lower.endswith(".pdf"):
+        return load_pdf(file_bytes, filename)
+    if lower.endswith(".docx"):
+        return load_docx(file_bytes, filename)
+    if lower.endswith(".pptx"):
+        return load_pptx(file_bytes, filename)
+    raise ValueError(f"Unsupported file type: {filename}")
+
+
+# --------------------------------------------------------------------------- #
+# Per-file cache — skip OCR + vision when the same content is seen again
+# --------------------------------------------------------------------------- #
+def ingest_cached(file_bytes: bytes, filename: str) -> list[Document]:
+    """`ingest`, but memoized on the file's content hash.
+
+    OCR and vision calls are the slow/expensive part of ingestion; the cache
+    makes re-uploading a file (e.g. after an app restart or index reset)
+    effectively instant. A corrupt cache entry is treated as a miss.
+    """
+    import hashlib
+    import pickle
+
+    # Include filename in the cache key so a PDF and a PPTX with identical
+    # bytes never collide, and renamed files are treated as new entries.
+    name_bytes = filename.encode("utf-8")
+    digest = hashlib.sha256(file_bytes + b"\x00" + name_bytes).hexdigest()[:24]
+    os.makedirs(config.CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(config.CACHE_DIR, f"{digest}.pkl")
+
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass  # unreadable cache -> re-ingest below
+
+    docs = ingest(file_bytes, filename)
+    try:
+        with open(cache_path, "wb") as f:
+            pickle.dump(docs, f)
+    except Exception:
+        pass  # caching is best-effort; never fail ingestion over it
+    return docs

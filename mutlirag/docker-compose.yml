@@ -1,0 +1,30 @@
+# Self-hosted Weaviate for Multi-RAG — free, runs locally, data persists in a
+# Docker volume so your index survives container restarts.
+#
+#   Start:   docker compose up -d
+#   Stop:    docker compose down          (keeps data)
+#   Wipe:    docker compose down -v        (deletes the index volume)
+#
+# HTTP API on :8080, gRPC (required by the v4 Python client) on :50051.
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.27.0
+    container_name: mutlirag-weaviate
+    restart: unless-stopped
+    ports:
+      - "8085:8080"     # REST  (host 8085 -> container 8080; 8080 was busy)
+      - "50051:50051"   # gRPC
+    environment:
+      # No API key needed for local dev.
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      # We supply our own vectors (local sentence-transformers), so Weaviate
+      # doesn't need to run any vectorizer module itself.
+      DEFAULT_VECTORIZER_MODULE: "none"
+      ENABLE_MODULES: ""
+      QUERY_DEFAULTS_LIMIT: "25"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+
+volumes:
+  weaviate_data:
