@@ -1,0 +1,20 @@
+# Python environment
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# Streamlit / local runtime files
+uploaded_document.pdf
+
+# Editor and OS files
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Logs and temporary files
+*.log
+*.tmp
