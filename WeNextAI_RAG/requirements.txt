@@ -1,0 +1,11 @@
+langchain
+langchain-community
+langchain-huggingface
+langchain-anthropic
+chromadb
+sentence-transformers
+pypdf
+python-dotenv
+rank_bm25
+flashrank
+streamlit
