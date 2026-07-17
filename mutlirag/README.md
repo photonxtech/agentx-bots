@@ -1,9 +1,10 @@
 # 📚 Multi-RAG — Chat with your documents (PDF · Word · PowerPoint · Text · Images)
 
-A **Streamlit** app that ingests a document, builds a searchable knowledge base
+A **FastAPI** web app that ingests a document, builds a searchable knowledge base
 from it, and answers your questions using **Groq** — grounded strictly in that
-document. Every chat owns exactly **one file**, and each chat can only ever
-answer from its own document (per-chat isolation).
+document. The backend serves a self-contained **HTML/JS frontend** and a REST API;
+every chat owns exactly **one file**, and each chat can only ever answer from its
+own document (per-chat isolation).
 
 The project is deliberately written so the **RAG mechanics are visible**: each
 pipeline stage is its own small, readable module instead of being hidden behind
@@ -27,9 +28,9 @@ app cite sources.
 | 2 | **Vision** | Every image (standalone, embedded, or a rendered page) is described by a Groq multimodal model, so charts/tables/photos become searchable — not just their OCR text. | [rag/vision.py](rag/vision.py) |
 | 3 | **Chunking** | Split long text into sentence-aware, overlapping windows. | [rag/chunking.py](rag/chunking.py) |
 | 4 | **Embedding** | Each chunk → a vector via a **local** model (free, offline). | [rag/embeddings.py](rag/embeddings.py) |
-| 5 | **Indexing / Retrieval** | Store vectors in **Weaviate** (Chroma fallback); **hybrid** search = semantic (cosine) + keyword (BM25). | [rag/vectorstore.py](rag/vectorstore.py) |
+| 5 | **Indexing / Retrieval** | Store vectors in **ChromaDB** (Weaviate optional); **hybrid** search = semantic (cosine) + keyword (BM25). | [rag/vectorstore.py](rag/vectorstore.py) |
 | 6 | **Generation** | Stuff top-k chunks into a grounded prompt → Groq (streamed). Follow-up questions are first rewritten into standalone queries. | [rag/generator.py](rag/generator.py) |
-| — | **UI + chat store** | Upload, index, chat, per-chat history, live metrics. | [app.py](app.py), [chat_store.py](chat_store.py) |
+| — | **API + frontend** | REST endpoints + a served HTML/JS UI: upload, index, chat, per-chat history, live metrics. | [api/](api/), [frontend/index.html](frontend/index.html), [chat_store.py](chat_store.py) |
 
 > **"Multi" here = multi-format, multi-modal ingestion.** Text, tables, and
 > images (via OCR **and** a vision model) all flow into one unified index.
@@ -43,8 +44,8 @@ app cite sources.
 - **Hybrid retrieval:** blends embedding similarity with BM25 keyword scoring
   (`HYBRID_ALPHA`), so both meaning (*"who earns the most"*) and exact tokens
   (*"ZEBRA-42"*) are found.
-- **Persistent index:** documents survive restarts (Weaviate volume, or
-  Chroma under `index_store/`). Per-file cache skips repeat OCR/vision.
+- **Persistent index:** documents survive restarts (Chroma under `index_store/`,
+  or a Weaviate volume). Per-file cache skips repeat OCR/vision.
 - **Per-chat isolation:** each chat has one file; retrieval is scoped so a chat
   never sees another chat's document.
 - **Chat memory:** follow-up questions (*"and when is it due?"*) are rewritten
@@ -58,10 +59,11 @@ app cite sources.
 
 | Concern | Choice | Why this one |
 |---|---|---|
-| **Frontend** | **Streamlit** | Pure-Python UI, zero JS; file uploader + chat widgets built in. |
+| **Backend / API** | **FastAPI** + **Uvicorn** | Async web framework; auto Swagger docs; serves both the REST API and the static frontend. |
+| **Frontend** | **Vanilla HTML/JS** (served at `/ui`) | Zero build step, single self-contained file; calls the API directly with `fetch()` so requests are visible in the browser. |
 | **LLM generation & vision** | **Groq** (`groq` SDK) | Very fast inference on open models; generous free tier; OpenAI-compatible; multimodal models for image understanding. |
 | **Embeddings** | **sentence-transformers** (`all-MiniLM-L6-v2`), local | Groq has **no** embedding endpoint, so we embed locally: free, private, offline. |
-| **Vector store** | **Weaviate** (self-hosted via Docker) + **Chroma** fallback | Weaviate persists in a Docker volume and survives restarts; if it's unreachable the app automatically falls back to embedded Chroma so nothing breaks. |
+| **Vector store** | **ChromaDB** (embedded, default) + **Weaviate** optional | Chroma persists under `index_store/` with zero setup. Optionally switch to self-hosted Weaviate (Docker); if it's unreachable the app auto-falls-back to Chroma so nothing breaks. |
 | **Keyword search** | **rank-bm25** | Adds exact-token matching alongside embeddings (hybrid search). |
 | **PDF parsing** | **PyMuPDF (fitz)** | Extracts the text layer *and* renders scanned pages / pulls embedded images for OCR — no external system install. |
 | **Word / PowerPoint** | **python-docx / python-pptx** | Paragraphs, tables, and embedded images from Office files. |
@@ -100,8 +102,8 @@ Other good answer models (in the fallback list): `llama-3.1-8b-instant`
 
 ### Prerequisites
 - **Python 3.10+**
-- **Docker** (optional but recommended, for the default Weaviate backend)
 - A **Groq API key** — get a free one at <https://console.groq.com/keys>
+- **Docker** — optional, only if you want the Weaviate backend instead of Chroma
 
 ### Install
 
@@ -113,7 +115,7 @@ python -m venv .venv
 
 # 2. install dependencies
 #    (first install is large: pulls PyTorch for OCR + embeddings)
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 
 # 3. add your Groq key (see next section)
 copy .env.example .env           # Windows   (cp .env.example .env on macOS/Linux)
@@ -150,36 +152,51 @@ GROQ_API_KEY=gsk_your_key_here
 
 ## 6. Running the project locally
 
-### Option A — with Weaviate (recommended, persistent)
+The backend code lives in `backend/` and the frontend in `frontend/`. The FastAPI
+backend serves **both** the API and the HTML frontend, so there is just **one
+process** to run. `--app-dir backend` puts the backend package on the import path,
+so you can launch from the project root.
+
+### Start the server
 
 ```bash
-# 1. start Weaviate (persists data in a Docker volume)
-docker compose up -d
-
-# 2. run the app
-streamlit run app.py
+# from the mutlirag/ project root (uses the ChromaDB backend by default)
+uvicorn api.main:app --reload --port 8010 --app-dir backend
 ```
 
-Weaviate management:
+On Windows, using the project venv explicitly (from the `mutlirag/` root):
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload --port 8010 --app-dir backend
+```
+
+> Alternatively, `cd backend` first and run `uvicorn api.main:app --reload --port 8010`
+> (drop the `--app-dir`). Data (`index_store/`, `extracted_images/`) is anchored to
+> the project root either way, so your index is found no matter where you launch from.
+
+Then open:
+
+| URL | What it is |
+|---|---|
+| **<http://localhost:8010/>** | The **frontend** (chat UI) — redirects to `/ui/` |
+| **<http://localhost:8010/docs>** | Interactive Swagger API docs |
+
+> Change `--port` to any free port if `8010` is taken (e.g. `--port 8020`).
+> The first question is slower: EasyOCR and the embedding model download their
+> weights once, then cache.
+
+### Optional — Weaviate instead of Chroma (persistent, Docker)
+
+By default the app uses embedded **Chroma** (`VECTOR_BACKEND = "chroma"` in
+[config.py](config.py)), stored under `index_store/chroma`. To use Weaviate:
+
 ```bash
-docker compose down       # stop, keep data
-docker compose down -v    # stop and WIPE the index volume
+docker compose up -d                 # start Weaviate (Docker volume)
+# set VECTOR_BACKEND = "weaviate" in config.py, then run uvicorn as above
+docker compose down                  # stop, keep data
+docker compose down -v               # stop and WIPE the index volume
 ```
 
-### Option B — without Docker (automatic Chroma fallback)
-
-Just run the app — if Weaviate isn't reachable it automatically falls back to
-embedded Chroma (data stored under `index_store/chroma`):
-
-```bash
-streamlit run app.py
-```
-
-To force Chroma even when Weaviate is available, set
-`VECTOR_BACKEND = "chroma"` in [config.py](config.py).
-
-The app opens at **<http://localhost:8501>**. The first question is slower:
-EasyOCR and the embedding model download their weights once, then cache.
+If Weaviate is selected but unreachable, the app automatically falls back to Chroma.
 
 ### Optional — sanity-check the pipeline from the CLI
 
@@ -191,15 +208,50 @@ python scripts/test_pipeline.py    # ingest → index → retrieve → (generate
 
 ---
 
-## 7. API endpoints
+## 7. REST API
 
-**This app has no custom REST/HTTP API of its own** — it is an interactive
-Streamlit UI served on **`http://localhost:8501`**. It talks to two services:
+The backend ([api/](api/)) exposes the RAG pipeline over HTTP, and the HTML
+frontend at `/ui` is just one client of it — any other client (React, mobile,
+curl) can drive the same endpoints. The core logic in `rag/` and `chat_store.py`
+is unchanged; the API is a thin layer on top.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Backend name, total chunks, chat count. |
+| `GET` | `/models` | Live Groq chat-model list (+ default). |
+| `POST` | `/chats` | Create a chat (`{"title": "..."}`). |
+| `GET` | `/chats` | List all chats (newest first) with file + chunk counts. |
+| `GET` | `/chats/{id}` | One chat with full message history. |
+| `DELETE` | `/chats/{id}` | Delete a chat and drop its indexed chunks. |
+| `POST` | `/chats/{id}/upload` | Upload **one** file (multipart) → ingest + index. |
+| `DELETE` | `/chats/{id}/file` | Remove this chat's file. |
+| `POST` | `/chats/{id}/ask` | Ask a question → full JSON answer + sources + metrics. |
+| `POST` | `/chats/{id}/ask/stream` | Same, streamed live as **SSE** (`meta`→`token`…→`done`). |
+| `POST` | `/reset` | Delete **all** chats and indexed documents. |
+
+Greetings/small talk ("hi", "thanks", "who are you") are answered directly with a
+friendly reply, without running retrieval — so a greeting never becomes "I don't know".
+
+### Design notes
+
+- **State loaded once, not per-session:** the ChromaDB store + chat registry are
+  hydrated a single time at startup ([api/main.py](api/main.py) lifespan) and
+  shared by every request via `RagService` ([api/service.py](api/service.py)).
+- **Concurrency-safe:** all index writes *and* the in-memory hybrid search are
+  guarded by a lock (the shared NumPy matrix / BM25 index is mutated in place).
+- **No blocked event loop:** endpoints are sync `def`, so FastAPI runs the
+  blocking OCR/embedding/Groq work in a threadpool.
+- **`chat_id` is explicit** on every route — per-chat isolation is preserved
+  (a chat can only answer from its own file).
+
+### External services it talks to
 
 | Service | Where | Port(s) | Purpose |
 |---|---|---|---|
-| **Streamlit UI** | local | `8501` (HTTP) | The app you interact with. |
-| **Weaviate** | local Docker | `8085` → container `8080` (REST), `50051` (gRPC) | Vector store. Ports set in [docker-compose.yml](docker-compose.yml) / [config.py](config.py). Anonymous access is enabled for local dev. |
+| **FastAPI backend + frontend** | local | `8010` (HTTP) | REST API and the served HTML UI (`/ui`). |
+| **Weaviate** *(optional)* | local Docker | `8085` → container `8080`, `50051` (gRPC) | Vector store when `VECTOR_BACKEND="weaviate"`. Chroma is the default/fallback. |
 | **Groq API** | external | HTTPS | LLM generation, query rewrite, and vision (requires `GROQ_API_KEY`). |
 
 ---
@@ -207,26 +259,37 @@ Streamlit UI served on **`http://localhost:8501`**. It talks to two services:
 ## 8. Project layout
 
 ```
-mutlirag/
-├── app.py               # Streamlit UI: upload → index → chat, per-chat history
-├── chat_store.py        # JSON-backed chat sessions + recency grouping
-├── config.py            # all tunables (models, chunking, retrieval, backend, ports)
-├── requirements.txt
-├── docker-compose.yml   # self-hosted Weaviate
-├── .env.example         # template for GROQ_API_KEY
-├── rag/
-│   ├── ingestion.py     # PDF / DOCX / PPTX / text / image → Documents (+ cache)
-│   ├── vision.py        # Groq multimodal image descriptions
-│   ├── chunking.py      # sentence-aware overlapping chunker
-│   ├── embeddings.py    # local sentence-transformers
-│   ├── vectorstore.py   # Weaviate (+ Chroma fallback) + hybrid BM25 search
-│   └── generator.py     # Groq call, live model list, follow-up rewriting
-├── scripts/
-│   ├── make_fixtures.py # generate sample files
-│   └── test_pipeline.py # end-to-end CLI smoke test
-├── extracted_images/    # (generated) images pulled from PDFs/DOCX/PPTX
-└── index_store/         # (generated) Chroma data + chat_history.json + cache
+mutlirag/                    # project root
+├── frontend/                # FRONTEND
+│   └── index.html           # self-contained HTML/JS chat UI (served at /ui)
+│
+├── backend/                 # BACKEND (all server code)
+│   ├── api/                 # FastAPI app — serves the API AND the frontend
+│   │   ├── main.py          # app, lifespan (load store once), endpoints, CORS, SSE, /ui mount
+│   │   ├── service.py       # RagService: shared store + lock, ingest, retrieve, ask, small talk
+│   │   └── schemas.py       # Pydantic request/response models
+│   ├── rag/
+│   │   ├── ingestion.py     # PDF / DOCX / PPTX / text / image → Documents (+ cache)
+│   │   ├── vision.py        # Groq multimodal image descriptions
+│   │   ├── chunking.py      # sentence-aware overlapping chunker
+│   │   ├── embeddings.py    # local sentence-transformers
+│   │   ├── vectorstore.py   # Weaviate (+ Chroma fallback) + hybrid BM25 search
+│   │   └── generator.py     # Groq call, live model list, follow-up rewriting
+│   ├── scripts/             # dev tools (make_fixtures.py, test_pipeline.py)
+│   ├── samples/             # sample fixture files
+│   ├── chat_store.py        # JSON-backed chat sessions + recency grouping
+│   ├── config.py            # all tunables + BASE_DIR anchoring (models, chunking, paths)
+│   └── requirements.txt
+│
+├── docker-compose.yml       # self-hosted Weaviate (optional)
+├── .env.example             # template for GROQ_API_KEY
+├── extracted_images/        # (generated) images pulled from PDFs/DOCX/PPTX
+└── index_store/             # (generated) Chroma data + chat_history.json + cache
 ```
+
+> **Data lives at the project root** (`index_store/`, `extracted_images/`), not
+> inside `backend/`. `config.BASE_DIR` anchors these paths so the index is found
+> regardless of the launch directory.
 
 ---
 
@@ -242,7 +305,7 @@ Full pinned list in [requirements.txt](requirements.txt). Highlights:
   from `requirements.txt` rather than relying on it.
 - `pandas` / `openpyxl` are listed in requirements, but **Excel/CSV ingestion is
   not currently wired into `ingest()`** — supported upload types are PDF, DOCX,
-  PPTX, TXT/MD, and images (see `UPLOAD_TYPES` in [app.py](app.py)).
+  PPTX, TXT/MD, and images (see the accepted types in [frontend/index.html](frontend/index.html)).
 
 ### Tuning (in [config.py](config.py))
 | Setting | Default | Effect |
@@ -250,7 +313,7 @@ Full pinned list in [requirements.txt](requirements.txt). Highlights:
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `800` / `120` | Chunk window & overlap (chars). |
 | `TOP_K` | `10` | Base chunks retrieved (auto-scales with #sources). |
 | `HYBRID_ALPHA` | `0.65` | Blend: `1.0` = pure semantic, `0.0` = pure BM25. |
-| `VECTOR_BACKEND` | `"weaviate"` | `"weaviate"` or `"chroma"`. |
+| `VECTOR_BACKEND` | `"chroma"` | `"chroma"` (embedded, default) or `"weaviate"`. |
 | `VISION_ENABLED` | `True` | Set `False` for OCR-only (faster, no vision API calls). |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Swap for e.g. `BAAI/bge-small-en-v1.5`. |
 
@@ -268,5 +331,3 @@ is meant to be committed and must contain only a placeholder** — if a real key
 was ever committed to it (or to `.env`), treat that key as compromised and
 **rotate it immediately** at <https://console.groq.com/keys>. Never paste live
 keys into example/template files.
-</content>
-</invoke>

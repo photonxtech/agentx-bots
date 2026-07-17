@@ -1,5 +1,7 @@
-# --- Frontend ---
-streamlit>=1.37
+# --- Backend API + frontend server (FastAPI serves the HTML UI) ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9   # required by FastAPI for file uploads
 
 # --- LLM generation (Groq) ---
 groq>=0.11

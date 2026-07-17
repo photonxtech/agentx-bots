@@ -4,6 +4,13 @@ Everything tweakable lives here so you can tune the pipeline without hunting
 through the code.
 """
 
+import os
+
+# Project root = the parent of backend/ (this file lives at backend/config.py).
+# All generated data dirs are anchored here so they resolve to the same place
+# no matter which directory the server is launched from.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # --- Embedding model (runs locally via sentence-transformers) ---
 # all-MiniLM-L6-v2: 384-dim, ~80MB, fast, strong quality/speed trade-off.
 # Swap for "BAAI/bge-small-en-v1.5" for a small quality bump at similar cost.
@@ -44,10 +51,10 @@ WEAVIATE_COLLECTION = "MultiRagChunk"   # class names must start uppercase
 # button) to start fresh.
 #   * Weaviate: data lives in the Docker volume (weaviate_data), not here.
 #   * Chroma:   data lives under INDEX_DIR/chroma.
-INDEX_DIR = "index_store"
+INDEX_DIR = os.path.join(BASE_DIR, "index_store")
 # Per-file ingestion cache, keyed by content hash: re-uploading the same file
 # skips OCR + vision entirely.
-CACHE_DIR = "index_store/cache"
+CACHE_DIR = os.path.join(INDEX_DIR, "cache")
 
 # --- Chat memory ---
 # Follow-up questions are rewritten into standalone search queries using the
@@ -89,5 +96,5 @@ OCR_LANGUAGES = ["en"]   # add e.g. "fr", "de" — see EasyOCR supported languag
 PDF_OCR_MIN_CHARS = 20
 # Embedded images pulled out of PDFs are saved here (for future vision-model
 # use). Ignore tiny images below this pixel area — usually logos/icons/noise.
-EXTRACTED_IMAGES_DIR = "extracted_images"
+EXTRACTED_IMAGES_DIR = os.path.join(BASE_DIR, "extracted_images")
 MIN_EMBEDDED_IMAGE_AREA = 100 * 100
