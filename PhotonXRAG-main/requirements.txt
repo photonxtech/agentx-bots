@@ -8,3 +8,5 @@ rank_bm25
 groq
 streamlit
 requests
+fastapi
+uvicorn[standard]
