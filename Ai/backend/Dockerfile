@@ -1,4 +1,4 @@
-FROM python:3.12.13-slim
+FROM python:3.12.13-slim-bookworm
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -32,4 +32,4 @@ COPY . .
 EXPOSE 8001
 
 # Run the application
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
