@@ -1,280 +1,185 @@
 """
-PhotonX Copilot - Streamlit Interface
-A polished, chat-first landing experience over the hybrid RAG engine in rag_engine.py.
+PhotonX RAG - FastAPI Integration
+=================================
+
+Drop this file into the root of the PhotonXRAG repo (same folder as
+rag_engine.py, ingest.py, app.py). It exposes the existing RAG pipeline
+as a JSON API, no Streamlit required.
+
+Run it:
+    pip install fastapi "uvicorn[standard]"
+    export GROQ_API_KEY=your_key_here
+    python ingest.py            # if you haven't already built chroma_db/
+    uvicorn main:app --reload --port 8000
+
+Then hit it:
+    curl http://localhost:8000/health
+    curl -X POST http://localhost:8000/ask \
+         -H "Content-Type: application/json" \
+         -d '{"query": "What services does PhotonX offer?"}'
+
+Interactive docs: http://localhost:8000/docs
 """
 
-import base64
-import html
-from pathlib import Path
+from contextlib import asynccontextmanager
+from typing import Literal
 
-import streamlit as st
-from rag_engine import load_resources, ask
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-LOGO_PATH = Path(__file__).parent / "assets" / "photonx-logo.png"
-LOGO_B64 = base64.b64encode(LOGO_PATH.read_bytes()).decode("utf-8")
-
-st.set_page_config(
-    page_title="PhotonX Copilot",
-    page_icon=str(LOGO_PATH),
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
+import rag_engine
 
 # ---------------------------------------------------------------------------
-# Styling
+# Load heavy resources (embedder, reranker, chroma collection, bm25 index)
+# exactly once at process startup, not per-request.
 # ---------------------------------------------------------------------------
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+_resources: rag_engine.RagResources | None = None
 
-    :root {
-        --bg-deep: #0B0F19;
-        --bg-panel: #131826;
-        --bg-panel-hover: #171E30;
-        --border: #232A3D;
-        --accent-amber: #F2A93B;
-        --accent-cyan: #4DD8E8;
-        --text-primary: #EDEFF5;
-        --text-muted: #8A93A6;
-    }
 
-    #MainMenu, footer, header { visibility: hidden; }
-    .stApp {
-        background: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(242,169,59,0.10), transparent),
-                    radial-gradient(ellipse 60% 40% at 85% 15%, rgba(77,216,232,0.08), transparent),
-                    var(--bg-deep);
-        color: var(--text-primary);
-        font-family: 'Inter', sans-serif;
-    }
-    .block-container { padding-top: 3rem; max-width: 760px; }
-
-    h1, h2, h3, .hero-title { font-family: 'Space Grotesk', sans-serif; }
-
-    /* Hero */
-    .hero-wrap { text-align: center; margin-bottom: 2.2rem; }
-    .hero-mark {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 52px; height: 52px; border-radius: 14px;
-        background: var(--bg-panel);
-        box-shadow: 0 0 32px rgba(242,169,59,0.35);
-        margin-bottom: 14px;
-        overflow: hidden;
-        animation: pulse-glow 3.5s ease-in-out infinite;
-    }
-    .hero-mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    @keyframes pulse-glow {
-        0%, 100% { box-shadow: 0 0 24px rgba(242,169,59,0.30); }
-        50% { box-shadow: 0 0 40px rgba(77,216,232,0.35); }
-    }
-    .hero-title {
-        font-size: 2.1rem; font-weight: 700; margin: 0 0 6px 0;
-        background: linear-gradient(90deg, #fff 40%, var(--accent-amber) 100%);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
-    }
-    .hero-sub { color: var(--text-muted); font-size: 0.98rem; margin: 0; }
-
-    /* Suggestion buttons */
-    div[data-testid="stButton"] > button {
-        width: 100%; text-align: left; white-space: normal;
-        background: var(--bg-panel) !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 12px !important;
-        color: var(--text-primary) !important;
-        font-family: 'Inter', sans-serif !important;
-        font-size: 0.88rem !important;
-        padding: 14px 16px !important;
-        min-height: 76px;
-        transition: all 0.18s ease;
-    }
-    div[data-testid="stButton"] > button:hover {
-        border-color: var(--accent-amber) !important;
-        background: var(--bg-panel-hover) !important;
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(242,169,59,0.12);
-    }
-
-    /* Chat bubbles */
-    div[data-testid="stChatMessage"] {
-        background: var(--bg-panel);
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        padding: 4px 6px;
-        margin-bottom: 10px;
-        animation: rise-in 0.35s ease;
-    }
-    @keyframes rise-in {
-        from { opacity: 0; transform: translateY(6px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Sources -- a single collapsed expander instead of a row of dead-end
-       chips. Opening it shows the actual excerpt each answer was pulled
-       from, which is the practical version of "click through to that part
-       of the document" given the source is a local .docx with no hosted
-       page to deep-link to. */
-    div[data-testid="stExpander"] {
-        border: 1px solid var(--border) !important;
-        border-radius: 10px !important;
-        background: var(--bg-panel) !important;
-        margin-top: 10px !important;
-    }
-    div[data-testid="stExpander"] summary {
-        font-family: 'JetBrains Mono', monospace !important;
-        font-size: 0.76rem !important;
-        color: var(--text-muted) !important;
-    }
-    .source-entry { margin-bottom: 10px; }
-    .source-entry:last-child { margin-bottom: 0; }
-    .source-heading {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.76rem; color: var(--accent-cyan);
-        display: block; margin-bottom: 3px;
-    }
-    .source-excerpt {
-        font-size: 0.85rem; color: var(--text-muted);
-        line-height: 1.5; margin: 0;
-    }
-
-    div[data-testid="stChatInput"] textarea { font-family: 'Inter', sans-serif !important; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-SUGGESTED_QUESTIONS = [
-    ("\U0001F4BC", "What services does PhotonX offer?"),
-    ("\U0001F916", "What kind of AI work has PhotonX done?"),
-    ("\U0001F91D", "How does PhotonX's engagement model work?"),
-    ("\U0001F4C1", "What are some recent PhotonX projects?"),
-]
-
-# ---------------------------------------------------------------------------
-# Resources (cached across reruns)
-# ---------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Warming up the copilot...")
-def get_resources():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _resources
     try:
-        return load_resources()
-    except RuntimeError:
-        # First run on a fresh deploy (Streamlit Cloud, HF Spaces, etc.) -- the
-        # container has the repo's source_docs/ but no chroma_db/ yet, since
-        # that's generated output, not something we commit. Build it once,
-        # here, instead of requiring a manual `python ingest.py` step that's
-        # easy to forget after every redeploy.
-        import ingest
-        with st.spinner("First run on this deployment: indexing PhotonX documents..."):
-            ingest.run(source_dir=ingest.SOURCE_DIR)
-        return load_resources()
+        _resources = rag_engine.load_resources()
+    except RuntimeError as e:
+        # Chroma collection empty / ingest.py not run yet. Let the app boot
+        # anyway so /health can report the problem clearly instead of the
+        # process crash-looping.
+        print(f"[startup warning] {e}")
+        _resources = None
+    yield
+    _resources = None
+
+
+app = FastAPI(
+    title="PhotonX RAG API",
+    description="Grounded Q&A over PhotonX's internal documents.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# Allow browser-based frontends (adjust origins for production).
+# If only your Streamlit app calls this API, you can tighten this to:
+#   allow_origins=["https://photonxrag.streamlit.app"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
-# Session state
+# Schemas
 # ---------------------------------------------------------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "pending_query" not in st.session_state:
-    st.session_state.pending_query = None
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
-def queue_question(q: str):
-    st.session_state.pending_query = q
-
-
-def render_sources(sources: list[dict]):
-    """One collapsed expander; opening it shows the excerpt each source
-    contributed, so clicking actually surfaces the relevant document
-    content instead of linking nowhere."""
-    if not sources:
-        return
-    label = "Source" if len(sources) == 1 else "Sources"
-    with st.expander(f"{label} ({len(sources)})"):
-        parts = []
-        for s in sources:
-            heading = html.escape(s["label"][:80])
-            excerpt = html.escape(s["excerpt"])
-            parts.append(
-                f'<div class="source-entry">'
-                f'<span class="source-heading">{heading}</span>'
-                f'<p class="source-excerpt">{excerpt}</p>'
-                f"</div>"
-            )
-        st.markdown("".join(parts), unsafe_allow_html=True)
-
-
-# ---------------------------------------------------------------------------
-# Hero (only before the first message)
-# ---------------------------------------------------------------------------
-if not st.session_state.messages:
-    st.markdown(
-        f"""
-        <div class="hero-wrap">
-            <div class="hero-mark"><img src="data:image/png;base64,{LOGO_B64}" alt="PhotonX" /></div>
-            <p class="hero-title">PhotonX Copilot</p>
-            <p class="hero-sub">Ask anything about our services, projects, or how we work \u2014 answered straight from the source.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+class AskRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="The user's question.")
+    chat_history: list[ChatTurn] = Field(
+        default_factory=list,
+        description="Prior turns for follow-up context (last 6 are used).",
     )
 
-    cols = st.columns(2)
-    for i, (icon, question) in enumerate(SUGGESTED_QUESTIONS):
-        with cols[i % 2]:
-            st.button(
-                f"{icon}  {question}",
-                key=f"suggest_{i}",
-                on_click=queue_question,
-                args=(question,),
+
+class SourceChunk(BaseModel):
+    id: str
+    text: str
+    metadata: dict
+    rerank_score: float
+
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: list[SourceChunk]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _require_resources() -> rag_engine.RagResources:
+    if _resources is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "RAG index isn't loaded. Run `python ingest.py` against your "
+                "source_docs/ files, then restart the API."
+            ),
+        )
+    return _resources
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+@app.get("/health")
+def health():
+    return {
+        "status": "ok" if _resources is not None else "index_not_loaded",
+        "indexed_chunks": len(_resources.all_ids) if _resources else 0,
+    }
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask(payload: AskRequest):
+    """Non-streaming: waits for the full answer, then returns it as JSON."""
+    res = _require_resources()
+    history = [turn.model_dump() for turn in payload.chat_history]
+
+    chunks, gen = rag_engine.ask(res, payload.query, history)
+    answer = "".join(gen)  # drain the generator into one string
+
+    return AskResponse(
+        answer=answer,
+        sources=[
+            SourceChunk(
+                id=c["id"],
+                text=c["text"],
+                metadata=c["metadata"],
+                rerank_score=c.get("rerank_score", 0.0),
             )
+            for c in chunks
+        ],
+    )
 
-# ---------------------------------------------------------------------------
-# Render existing conversation
-# ---------------------------------------------------------------------------
-for msg in st.session_state.messages:
-    avatar = str(LOGO_PATH) if msg["role"] == "assistant" else None
-    with st.chat_message(msg["role"], avatar=avatar):
-        st.markdown(msg["content"])
-        render_sources(msg.get("sources", []))
 
-# ---------------------------------------------------------------------------
-# Input (typed or from a suggestion click)
-# ---------------------------------------------------------------------------
-typed_query = st.chat_input("Ask PhotonX Copilot...")
-query = st.session_state.pending_query or typed_query
-st.session_state.pending_query = None
+@app.post("/ask/stream")
+def ask_stream(payload: AskRequest):
+    """
+    Streaming variant: Server-Sent-Events-style plain text stream.
+    Sources aren't known until retrieval finishes, so they're sent first
+    as a single JSON line prefixed with `event: sources`, followed by the
+    token stream prefixed with `event: token`.
+    """
+    res = _require_resources()
+    history = [turn.model_dump() for turn in payload.chat_history]
 
-if query:
-    st.session_state.messages.append({"role": "user", "content": query})
-    with st.chat_message("user"):
-        st.markdown(query)
+    def event_stream():
+        import json
 
-    with st.chat_message("assistant", avatar=str(LOGO_PATH)):
-        try:
-            resources = get_resources()
-            chunks, stream = ask(resources, query, st.session_state.messages[:-1])
-            full_answer = st.write_stream(stream)
+        chunks, gen = rag_engine.ask(res, payload.query, history)
+        sources_payload = [
+            {
+                "id": c["id"],
+                "metadata": c["metadata"],
+                "rerank_score": c.get("rerank_score", 0.0),
+            }
+            for c in chunks
+        ]
+        yield f"event: sources\ndata: {json.dumps(sources_payload)}\n\n"
+        for token in gen:
+            yield f"event: token\ndata: {json.dumps(token)}\n\n"
+        yield "event: done\ndata: {}\n\n"
 
-            seen_keys, sources = set(), []
-            for c in chunks:
-                meta = c["metadata"]
-                heading = meta.get("h2") or meta.get("h1") or ""
-                key = (meta.get("source"), heading)
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    label = meta.get("title", "Document")
-                    if heading:
-                        label += f" — {heading}"
-                    excerpt = c["text"].strip().replace("\n", " ")
-                    if len(excerpt) > 280:
-                        excerpt = excerpt[:280].rsplit(" ", 1)[0] + "…"
-                    sources.append({"label": label, "excerpt": excerpt})
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-            render_sources(sources)
 
-            st.session_state.messages.append(
-                {"role": "assistant", "content": full_answer, "sources": sources}
-            )
-        except RuntimeError as e:
-            st.error(str(e))
-        except Exception as e:
-            st.error(f"Something went wrong: {e}")
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

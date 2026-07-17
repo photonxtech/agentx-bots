@@ -61,6 +61,8 @@ app = FastAPI(
 )
 
 # Allow browser-based frontends (adjust origins for production).
+# If only your Streamlit app calls this API, you can tighten this to:
+#   allow_origins=["https://photonxrag.streamlit.app"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
