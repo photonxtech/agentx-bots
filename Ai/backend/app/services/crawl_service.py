@@ -8,7 +8,7 @@ from app.config import settings
 from app.crawler.discover import discover_urls
 from app.database.models import CrawlJob, CrawlJobStatus, Page, PageStatus, Website, WebsiteStatus
 from app.embeddings.embedder import embed_texts
-from app.extractor.renderer import extract_page_content
+from app.extractor.renderer import extract_page_content, launch_browser
 from app.llm.bm25_index import invalidate_bm25_index
 from app.services.cache_service import bump_generation
 from app.utils.hashing import hash_content
@@ -25,11 +25,11 @@ from app.vectordb.collection import (
 logger = get_logger(__name__)
 
 
-async def _process_url(db: Session, website: Website, url: str, force: bool, job: CrawlJob) -> None:
+async def _process_url(db: Session, website: Website, url: str, force: bool, job: CrawlJob, browser) -> None:
     url = normalize_url(url)
     existing_page = db.query(Page).filter(Page.website_id == website.id, Page.url == url).first()
 
-    extracted = await extract_page_content(url)
+    extracted = await extract_page_content(browser, url)
     if extracted is None:
         if existing_page:
             existing_page.status = PageStatus.failed
@@ -101,11 +101,13 @@ async def run_crawl(db: Session, website: Website, force: bool = False) -> Crawl
 
         semaphore = asyncio.Semaphore(settings.crawler_concurrency)
 
-        async def _bounded(url: str) -> None:
-            async with semaphore:
-                await _process_url(db, website, url, force, job)
+        async with launch_browser() as browser:
 
-        await asyncio.gather(*[_bounded(url) for url in urls])
+            async def _bounded(url: str) -> None:
+                async with semaphore:
+                    await _process_url(db, website, url, force, job, browser)
+
+            await asyncio.gather(*[_bounded(url) for url in urls])
 
         normalized_current = [normalize_url(u) for u in urls]
         stale_pages = (
