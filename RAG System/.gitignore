@@ -1,0 +1,30 @@
+# Python environment
+venv/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE/editor files
+.vscode/
+*.swp
+*~
+
+# Logs and databases
+*.log
+*.sqlite3
+chroma_db/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Local env files
+.env

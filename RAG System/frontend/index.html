@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>DocuBot | Multimodal RAG Chatbot</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="/static/style.css?v=1.0.4">
+</head>
+
+<body>
+
+    <div class="app-container">
+
+        <!-- ================= Sidebar ================= -->
+
+        <aside class="sidebar">
+
+            <!-- Logo -->
+            <div class="brand-container">
+
+                <div class="brand-logo">
+                    DB
+                </div>
+
+                <div class="brand-text">
+                    <h2 class="brand-title">DocuBot</h2>
+                    <span class="brand-subtitle">
+                        Multimodal RAG Engine
+                    </span>
+                </div>
+
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <!-- Status -->
+
+            <div id="connection-status" class="status-badge offline">
+
+                <span class="dot"></span>
+
+                <span id="status-text">
+                    Connecting...
+                </span>
+
+            </div>
+
+            <!-- Upload -->
+
+            <h4 class="upload-title">
+                Add Documents
+            </h4>
+
+            <div class="upload-zone" id="drop-zone">
+
+                <div class="upload-icon">
+                    📄
+                </div>
+
+                <span>
+                    Drag & Drop Files
+                </span>
+
+                <p>
+                    PDF • PNG • JPG • JPEG • WEBP
+                </p>
+
+                <button type="button" class="browse-btn">
+                    Browse Files
+                </button>
+
+                <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp">
+
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <!-- Sources -->
+
+            <div class="sources-section">
+
+                <div class="section-header">
+
+                    <h4>
+                        Indexed Documents
+                    </h4>
+
+                    <span id="file-count">
+                        0
+                    </span>
+
+                </div>
+
+                <div id="sources-list" class="sources-list">
+
+                    <div class="empty-state">
+
+                        <div class="empty-icon">
+                            📚
+                        </div>
+
+                        <p>
+                            No documents uploaded yet
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+            <button id="btn-clear" class="btn-clear" disabled>
+
+                🗑 Clear Database
+
+            </button>
+
+        </aside>
+
+        <!-- ================= Main Chat ================= -->
+
+        <main class="chat-window">
+
+            <!-- Header -->
+
+            <header class="chat-header">
+
+                <h1>
+                    💬 Multimodal RAG Chatbot
+                </h1>
+
+                <p>
+                    Ask questions grounded in your uploaded documents.
+                </p>
+
+            </header>
+
+            <!-- Messages -->
+
+            <section id="chat-history" class="chat-history">
+
+                <div id="welcome-card" class="welcome-card">
+
+                    <div class="welcome-icon">
+                        🤖
+                    </div>
+
+                    <h2>
+                        Welcome to DocuBot
+                    </h2>
+
+                    <p>
+                        Upload PDFs or Images from the sidebar and start asking questions.
+                    </p>
+
+                </div>
+
+            </section>
+
+            <!-- Input -->
+
+            <footer class="chat-input-area">
+
+                <div class="input-container">
+
+                    <input id="chat-input" type="text" placeholder="Ask something about your documents..."
+                        autocomplete="off" disabled>
+
+                    <button id="btn-send" class="btn-send" disabled>
+
+                        ➜
+
+                    </button>
+
+                </div>
+
+            </footer>
+
+        </main>
+
+    </div>
+
+    <!-- ================= JavaScript ================= -->
+
+    <script>
+
+        const API_URL = window.location.origin;
+        let chatHistory = [];
+        let backendLive = false;
+
+        // UI elements
+        const statusBadge = document.getElementById("connection-status");
+        const statusText = document.getElementById("status-text");
+        const fileInput = document.getElementById("file-input");
+        const dropZone = document.getElementById("drop-zone");
+        const sourcesList = document.getElementById("sources-list");
+        const btnClear = document.getElementById("btn-clear");
+        const chatInput = document.getElementById("chat-input");
+        const btnSend = document.getElementById("btn-send");
+        const chatHistoryContainer = document.getElementById("chat-history");
+        const welcomeCard = document.getElementById("welcome-card");
+
+        // Helper to enable/disable UI controls
+        function toggleUI(enabled) {
+            backendLive = enabled;
+            chatInput.disabled = !enabled;
+            btnSend.disabled = !enabled;
+            btnClear.disabled = !enabled;
+
+            if (enabled) {
+                statusBadge.className = "status-badge online";
+                statusText.innerText = "Backend Connected";
+            } else {
+                statusBadge.className = "status-badge offline";
+                statusText.innerText = "Connection Failed";
+            }
+        }
+
+        // Verify API Health
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_URL}/health`, { timeout: 3000 });
+                if (response.ok) {
+                    toggleUI(true);
+                    loadSources();
+                } else {
+                    toggleUI(false);
+                }
+            } catch (error) {
+                toggleUI(false);
+            }
+        }
+
+        // Load Indexed Sources
+        async function loadSources() {
+            try {
+                const response = await fetch(`${API_URL}/sources`);
+                if (response.ok) {
+                    const data = await response.json();
+                    renderSources(data.sources || []);
+                }
+            } catch (error) {
+                console.error("Error loading sources:", error);
+            }
+        }
+
+        function renderSources(sources) {
+            const fileCount = document.getElementById("file-count");
+            if (fileCount) fileCount.innerText = sources.length;
+
+            sourcesList.innerHTML = "";
+            if (sources.length === 0) {
+                sourcesList.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📚</div>
+                        <p>No documents uploaded yet</p>
+                    </div>
+                `;
+                return;
+            }
+            sources.forEach(source => {
+                const fileChip = document.createElement("div");
+                fileChip.className = "file-chip";
+                fileChip.innerHTML = `
+                    <span class="dot"></span>
+                    <div class="file-chip-name" title="${source}">${source}</div>
+                `;
+                sourcesList.appendChild(fileChip);
+            });
+        }
+
+        // Dropzone listeners
+        dropZone.addEventListener("click", () => fileInput.click());
+        dropZone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = "#2563eb";
+            dropZone.style.backgroundColor = "rgba(37, 99, 235, 0.05)";
+        });
+        dropZone.addEventListener("dragleave", () => {
+            dropZone.style.borderColor = "#334155";
+            dropZone.style.backgroundColor = "#1e293b";
+        });
+        dropZone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = "#334155";
+            dropZone.style.backgroundColor = "#1e293b";
+            if (e.dataTransfer.files.length > 0) {
+                handleUpload(e.dataTransfer.files);
+            }
+        });
+        fileInput.addEventListener("change", () => {
+            if (fileInput.files.length > 0) {
+                handleUpload(fileInput.files);
+            }
+        });
+
+        // Upload handler
+        async function handleUpload(files) {
+            if (!backendLive) return;
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append("files", files[i]);
+            }
+
+            // Display loading indicator in sources list
+            sourcesList.innerHTML = `<p style="font-size: 0.8rem; color: #60a5fa; text-align: center; margin-top: 10px;">Processing uploads...</p>`;
+
+            try {
+                const response = await fetch(`${API_URL}/ingest`, {
+                    method: "POST",
+                    body: formData
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    loadSources();
+                    alert(`Upload complete! Ingested: ${data.ingested.length} files.`);
+                } else {
+                    const err = await response.json();
+                    alert(`Upload failed: ${err.detail || "Unknown error"}`);
+                    loadSources();
+                }
+            } catch (error) {
+                alert(`Error uploading files: ${error}`);
+                loadSources();
+            }
+        }
+
+        // Clear Database
+        btnClear.addEventListener("click", async () => {
+            if (!backendLive) return;
+            if (!confirm("Are you sure you want to wipe the document database? This will clear all chat history as well.")) return;
+
+            try {
+                const response = await fetch(`${API_URL}/clear`, { method: "POST" });
+                if (response.ok) {
+                    chatHistory = [];
+                    chatHistoryContainer.innerHTML = `
+                        <div id="welcome-card" class="welcome-card">
+                            <div class="welcome-icon">🤖</div>
+                            <h2>Welcome to DocuBot</h2>
+                            <p>Upload PDFs or Images from the sidebar and start asking questions.</p>
+                        </div>
+                    `;
+                    loadSources();
+                    alert("Database cleared successfully!");
+                } else {
+                    alert("Failed to clear database.");
+                }
+            } catch (error) {
+                alert(`Error: ${error}`);
+            }
+        });
+
+        // Chat send handler
+        async function submitQuery() {
+            const queryText = chatInput.value.trim();
+            if (!queryText || !backendLive) return;
+
+            // Clear input box
+            chatInput.value = "";
+
+            // Hide welcome card
+            const welcome = document.getElementById("welcome-card");
+            if (welcome) welcome.style.display = "none";
+
+            // Render user bubble
+            appendMessage("user", queryText);
+
+            // Append user msg to local state history
+            const historyPayload = chatHistory.map(msg => ({
+                role: msg.role === "user" ? "user" : "assistant",
+                content: msg.content
+            }));
+            chatHistory.push({ role: "user", content: queryText });
+
+            // Create temporary assistant bubble with loader spinner
+            const assistantBubbleId = "assistant-" + Date.now();
+            appendMessage("assistant", `<div class="spinner"></div>Thinking...`, assistantBubbleId);
+            scrollChat();
+
+            try {
+                const response = await fetch(`${API_URL}/query`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        question: queryText,
+                        chat_history: historyPayload
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    updateAssistantBubble(assistantBubbleId, data.answer, data.texts || [], data.images || []);
+                    chatHistory.push({ role: "assistant", content: data.answer, sources: { texts: data.texts, images: data.images } });
+                } else {
+                    const err = await response.json();
+                    updateAssistantBubble(assistantBubbleId, `⚠️ Server error: ${err.detail || "Could not process request."}`);
+                }
+            } catch (error) {
+                updateAssistantBubble(assistantBubbleId, `⚠️ Connection error: ${error.message}`);
+            }
+            scrollChat();
+        }
+
+        // Chat Input key listener
+        chatInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                submitQuery();
+            }
+        });
+        btnSend.addEventListener("click", submitQuery);
+
+        // Render functions
+        function appendMessage(role, content, bubbleId = "") {
+            const wrapper = document.createElement("div");
+            wrapper.className = `chat-bubble-wrapper ${role}`;
+            if (bubbleId) wrapper.id = bubbleId;
+
+            const avatarText = role === "user" ? "👤" : "🤖";
+            wrapper.innerHTML = `
+                <div class="chat-avatar ${role}">${avatarText}</div>
+                <div class="chat-bubble">${content}</div>
+            `;
+            chatHistoryContainer.appendChild(wrapper);
+        }
+
+        function updateAssistantBubble(bubbleId, text, textSources = [], imageSources = []) {
+            const wrapper = document.getElementById(bubbleId);
+            if (!wrapper) return;
+            const bubble = wrapper.querySelector(".chat-bubble");
+
+            let htmlContent = `<div>${text}</div>`;
+
+            // Append grounding sources if present
+            const totalCount = textSources.length + imageSources.length;
+            if (totalCount > 0) {
+                let itemsHtml = "";
+                textSources.forEach(src => {
+                    itemsHtml += `
+                        <div class="source-item">
+                            <span class="source-label">${src.source} · Page ${src.page}</span>
+                            <div class="source-text">${src.text.replace(/\n/g, '<br />')}</div>
+                        </div>
+                    `;
+                });
+                imageSources.forEach(img => {
+                    itemsHtml += `
+                        <div class="source-item">
+                            <span class="source-label">${img.source} · Page ${img.page}</span>
+                            <img src="data:${img.mime_type};base64,${img.image_data}" class="source-img" />
+                        </div>
+                    `;
+                });
+
+                htmlContent += `
+                    <details class="sources-expander">
+                        <summary class="sources-header">📚 Grounding Sources (${totalCount})</summary>
+                        <div class="sources-content">
+                            ${itemsHtml}
+                        </div>
+                    </details>
+                `;
+            }
+
+            bubble.innerHTML = htmlContent;
+        }
+
+        function scrollChat() {
+            chatHistoryContainer.scrollTop = chatHistoryContainer.scrollHeight;
+        }
+
+        // Run checks
+        checkHealth();
+        setInterval(checkHealth, 8000);
+
+    </script>
+
+</body>
+
+</html>
