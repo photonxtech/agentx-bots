@@ -14,7 +14,8 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap"
         rel="stylesheet">
 
-    <link rel="stylesheet" href="/static/style.css?v=1.0.4">
+    <link rel="stylesheet" href="/static/style.css?v=1.0.5">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
 <body>
@@ -439,7 +440,19 @@
             if (!wrapper) return;
             const bubble = wrapper.querySelector(".chat-bubble");
 
-            let htmlContent = `<div>${text}</div>`;
+            // Format markdown text using marked.js if available, fallback to basic escaping
+            let parsedText;
+            if (typeof marked !== 'undefined' && marked.parse) {
+                marked.setOptions({
+                    breaks: true,
+                    gfm: true
+                });
+                parsedText = marked.parse(text);
+            } else {
+                parsedText = `<div>${text.replace(/\n/g, '<br />')}</div>`;
+            }
+
+            let htmlContent = `<div class="markdown-body">${parsedText}</div>`;
 
             // Append grounding sources if present
             const totalCount = textSources.length + imageSources.length;
