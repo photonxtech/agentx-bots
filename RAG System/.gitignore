@@ -17,6 +17,10 @@ dist/
 *.swp
 *~
 
+# Runtime data/storage
+data/
+docstore/
+
 # Logs and databases
 *.log
 *.sqlite3
