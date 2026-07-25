@@ -8,6 +8,7 @@ which is what keeps answers grounded and citable.
 from __future__ import annotations
 
 import os
+import re
 
 from groq import Groq
 
@@ -28,7 +29,7 @@ SYSTEM_PROMPT = (
     "Be tolerant of slight misspellings or name variations in the question (e.g., 'doremon' "
     "referring to 'Doraemon', 'ppt' referring to a .pptx file) by mapping them to the "
     "closest match in the context. "
-    "When the answer is found in the context, cite the source filename in parentheses."
+    "Do not include source filenames, page numbers, or scores in your generated response. Provide a direct, clean answer."
 )
 
 
@@ -69,10 +70,22 @@ def rewrite_query(question: str, history: list[dict]) -> str:
     if not turns:
         return question
 
-    convo = "\n".join(
+    # Include full list of user questions so the rewriter can resolve references to earlier topics
+    user_questions = [f"- Turn {i+1}: {m['content'][:150]}" for i, m in enumerate(turns) if m.get("role") == "user"]
+    user_q_summary = "\n".join(user_questions[-10:])
+
+    # Recent turns context
+    recent_convo = "\n".join(
         f"{m['role']}: {m['content'][:300]}"
         for m in turns[-config.REWRITE_HISTORY_TURNS:]
     )
+
+    prompt_content = (
+        f"Past user questions in this chat:\n{user_q_summary}\n\n"
+        f"Recent conversation turns:\n{recent_convo}\n\n"
+        f"Latest user question: {question}"
+    )
+
     try:
         resp = _client().chat.completions.create(
             model=config.REWRITE_MODEL,
@@ -82,21 +95,22 @@ def rewrite_query(question: str, history: list[dict]) -> str:
                 {
                     "role": "system",
                     "content": (
-                        "You rewrite follow-up questions into standalone search "
-                        "queries. Replace every pronoun or vague reference "
-                        "(it, that, the document, and...) with the concrete "
-                        "subject from the conversation. Keep it short.\n"
-                        "Example: after a discussion of an electricity bill, "
-                        "'and when is it due?' becomes "
-                        "'When is the electricity bill due?'\n"
-                        "Return ONLY the rewritten question — no explanation, "
-                        "no quotes."
+                        "You are a search query optimizer for a RAG document search engine.\n"
+                        "Your task: rewrite the user's latest question into a standalone, concise search query.\n\n"
+                        "CRITICAL RULES:\n"
+                        "1. NO TOPIC POISONING: Do NOT force a previous topic (like 'LEAP framework') into a question about a different topic (like '3 zones', 'smart zone', 'color zones').\n"
+                        "2. EARLIER REFERENCES: If the user refers to something discussed earlier (e.g. 'earlier there 3 zones right'), check the past user questions and recent conversation to identify what '3 zones' refers to (e.g. Yellow zone, Green zone, Smart zones / Red zone), and rewrite the query specifically for those zones.\n"
+                        "3. RESOLVE PRONOUNS: Replace ambiguous pronouns (it, that, they, these) with the exact subject being discussed.\n"
+                        "4. ALREADY STANDALONE: If the latest question is already clean and specific (e.g. 'can u explain about smart zone'), keep it focused without appending unrelated frameworks.\n"
+                        "5. OUTPUT FORMAT: Return ONLY the rewritten search query. No quotes, explanations, or labels."
                     ),
                 },
-                {"role": "user", "content": f"Conversation:\n{convo}\n\nLatest question: {question}"},
+                {"role": "user", "content": prompt_content},
             ],
         )
         rewritten = (resp.choices[0].message.content or "").strip()
+        # Remove surrounding quotes if any
+        rewritten = rewritten.strip('"\'')
         # Sanity guard: a rambling or empty rewrite is worse than the original.
         if rewritten and len(rewritten) <= max(200, 3 * len(question)):
             return rewritten
@@ -105,13 +119,15 @@ def rewrite_query(question: str, history: list[dict]) -> str:
     return question
 
 
+_HEADER_RE = re.compile(r"^\[(PDF|File|Image|DOCX|PPTX):[^\]]+\]\n?", re.MULTILINE)
+
+
 def build_context(hits: list[tuple[Document, float]]) -> str:
-    """Format retrieved chunks into a numbered context block for the prompt."""
+    """Format retrieved chunks into a numbered context block for the prompt, omitting filenames, page numbers, and scores."""
     blocks = []
     for i, (doc, score) in enumerate(hits, 1):
-        blocks.append(
-            f"[{i}] (source: {doc.source}, type: {doc.kind}, score: {score:.2f})\n{doc.text}"
-        )
+        clean_text = _HEADER_RE.sub("", doc.text).strip()
+        blocks.append(f"[{i}]\n{clean_text}")
     return "\n\n".join(blocks)
 
 
@@ -120,15 +136,19 @@ def answer(
     hits: list[tuple[Document, float]],
     model: str = config.DEFAULT_MODEL,
     temperature: float = config.DEFAULT_TEMPERATURE,
+    original_question: str | None = None,
 ):
     """Stream an answer from Groq, grounded in the retrieved context.
 
-    Yields text deltas so the Streamlit UI can render the answer live.
+    Yields text deltas so the UI can render the answer live.
     """
     context = build_context(hits) or "(no context retrieved)"
+    
+    q_text = f"Question: {original_question}\n(Search topic: {question})" if original_question and original_question != question else f"Question: {question}"
+
     user_prompt = (
         f"Context:\n{context}\n\n"
-        f"Question: {question}\n\n"
+        f"{q_text}\n\n"
         "Answer using only the context above."
     )
 

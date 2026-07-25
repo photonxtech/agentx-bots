@@ -7,14 +7,18 @@ through the code.
 import os
 
 # Project root = the parent of backend/ (this file lives at backend/config.py).
-# All generated data dirs are anchored here so they resolve to the same place
-# no matter which directory the server is launched from.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Where generated data (vector index, chat history, extracted images) is stored.
+# Defaults to the project root. On a host with an ephemeral filesystem (e.g.
+# Render), set MULTIRAG_DATA_DIR to a mounted persistent disk so data survives
+# restarts and redeploys.
+DATA_DIR = os.getenv("MULTIRAG_DATA_DIR", BASE_DIR)
+
 # --- Embedding model (runs locally via sentence-transformers) ---
-# all-MiniLM-L6-v2: 384-dim, ~80MB, fast, strong quality/speed trade-off.
-# Swap for "BAAI/bge-small-en-v1.5" for a small quality bump at similar cost.
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# BAAI/bge-small-en-v1.5: 384-dim, ~130MB, fast, high accuracy on dense retrieval (MTEB benchmark leader).
+# Swap for "BAAI/bge-base-en-v1.5" (768-dim, ~440MB) for maximum semantic quality.
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 # --- Chunking ---
 # Characters per chunk and overlap between consecutive chunks.
@@ -51,7 +55,7 @@ WEAVIATE_COLLECTION = "MultiRagChunk"   # class names must start uppercase
 # button) to start fresh.
 #   * Weaviate: data lives in the Docker volume (weaviate_data), not here.
 #   * Chroma:   data lives under INDEX_DIR/chroma.
-INDEX_DIR = os.path.join(BASE_DIR, "index_store")
+INDEX_DIR = os.path.join(DATA_DIR, "index_store")
 # Per-file ingestion cache, keyed by content hash: re-uploading the same file
 # skips OCR + vision entirely.
 CACHE_DIR = os.path.join(INDEX_DIR, "cache")
@@ -83,9 +87,34 @@ MAX_TOKENS = 1024
 # tables-as-images, and layouts become searchable — not just their OCR text.
 # Set VISION_ENABLED = False to fall back to OCR-only (faster, no API calls).
 VISION_ENABLED = True
-VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Groq's vision model. The old llama-4 scout/maverick models were decommissioned;
+# qwen3.6-27b is the current multimodal option. It's a reasoning model, so vision.py
+# passes reasoning_effort="none" and strips any <think> block from the output.
+VISION_MODEL = "qwen/qwen3.6-27b"
 VISION_MAX_TOKENS = 500
-VISION_MAX_DIM = 1280   # px; images are downscaled to this before upload
+VISION_MAX_DIM = 768   # px; images are downscaled to this before upload. Lower =
+# fewer tokens per image (cost scales ~quadratically), so more images fit under
+# the per-day/per-minute limits. 768 is plenty for photos; OCR is unaffected
+# (it reads from a separate 2x render, not this). Raise toward 1280 if fine
+# detail in dense diagrams matters.
+# Rate-limit handling. The vision model has both per-minute (TPM) and per-day
+# (TPD) token limits. A multi-image file fires vision calls in a burst that can
+# trip the per-minute limit, so we throttle calls and retry transient 429s.
+VISION_MIN_INTERVAL = 2.0    # min seconds between vision calls (avoids TPM bursts)
+VISION_MAX_RETRIES = 4       # retries on a transient (per-minute) rate limit
+VISION_MAX_RETRY_WAIT = 25.0  # s; if the API says wait longer (per-day limit), give up instead
+
+# --- RAGAS-style answer evaluation (reference-free, computed live per answer) ---
+# After each grounded answer we score it on three RAGAS metrics — WITHOUT any
+# ground-truth labels — using a small, fast judge model:
+#   * faithfulness      — is every claim in the answer grounded in the context?
+#   * answer_relevancy  — does the answer actually address the question?
+#   * context_precision — are the *useful* retrieved chunks ranked near the top?
+# Each metric is an extra Groq call (faithfulness is two), so this adds latency.
+# Set RAGAS_ENABLED = False to turn evaluation off entirely (no extra API calls).
+RAGAS_ENABLED = True
+RAGAS_EVAL_MODEL = "llama-3.1-8b-instant"   # cheap/fast model used only for judging
+RAGAS_RELEVANCY_N = 3   # how many questions to generate from the answer for relevancy
 
 # --- OCR ---
 OCR_LANGUAGES = ["en"]   # add e.g. "fr", "de" — see EasyOCR supported languages
@@ -96,5 +125,5 @@ OCR_LANGUAGES = ["en"]   # add e.g. "fr", "de" — see EasyOCR supported languag
 PDF_OCR_MIN_CHARS = 20
 # Embedded images pulled out of PDFs are saved here (for future vision-model
 # use). Ignore tiny images below this pixel area — usually logos/icons/noise.
-EXTRACTED_IMAGES_DIR = os.path.join(BASE_DIR, "extracted_images")
+EXTRACTED_IMAGES_DIR = os.path.join(DATA_DIR, "extracted_images")
 MIN_EMBEDDED_IMAGE_AREA = 100 * 100

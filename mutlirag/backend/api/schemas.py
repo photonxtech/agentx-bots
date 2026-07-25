@@ -78,6 +78,11 @@ class Metrics(BaseModel):
     ttft_ms: int
     generation_ms: int
     confidence_pct: int
+    # Reference-free RAGAS scores in [0, 1]; absent/None when eval is disabled,
+    # skipped (small talk / "I don't know"), or a judge call failed.
+    faithfulness: float | None = None
+    answer_relevancy: float | None = None
+    context_precision: float | None = None
 
 
 class AskResponse(BaseModel):

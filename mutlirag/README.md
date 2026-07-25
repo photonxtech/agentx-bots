@@ -1,5 +1,8 @@
 # 📚 Multi-RAG — Chat with your documents (PDF · Word · PowerPoint · Text · Images)
 
+
+
+
 A **FastAPI** web app that ingests a document, builds a searchable knowledge base
 from it, and answers your questions using **Groq** — grounded strictly in that
 document. The backend serves a self-contained **HTML/JS frontend** and a REST API;

@@ -162,6 +162,39 @@ def upload_file(chat_id: str, file: UploadFile = File(...)):
     return result
 
 
+@app.post(
+    "/chats/{chat_id}/upload/stream",
+    tags=["files"],
+)
+def upload_file_stream(chat_id: str, file: UploadFile = File(...)):
+    """Ingest + index ONE file into a chat with real-time SSE progress updates."""
+    s = svc()
+    try:
+        s.get_chat(chat_id)
+    except ChatNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Chat {chat_id} not found.")
+
+    file_bytes = file.file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def progress_stream():
+        try:
+            for event in s.ingest_file_stream(chat_id, file_bytes, file.filename or "upload"):
+                yield sse(event)
+        except Exception as e:
+            yield sse({"status": "error", "percent": 100, "message": f"Ingestion failed: {e}"})
+
+    return StreamingResponse(
+        progress_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.delete("/chats/{chat_id}/file", status_code=204, tags=["files"])
 def remove_file(chat_id: str):
     """Remove this chat's indexed file so a different one can be uploaded."""
@@ -219,7 +252,7 @@ def ask(chat_id: str, body: schemas.AskRequest):
     ttft = None
     parts: list[str] = []
     try:
-        for delta in s.answer_stream(r["search_query"], r["hits"]):
+        for delta in s.answer_stream(r["search_query"], r["hits"], original_question=body.question):
             if ttft is None:
                 ttft = time.perf_counter() - t_gen
             parts.append(delta)
@@ -235,6 +268,11 @@ def ask(chat_id: str, body: schemas.AskRequest):
         "generation_ms": generation_ms,
         "confidence_pct": r["confidence_pct"],
     }
+
+    # Reference-free RAGAS scores (faithfulness / relevancy / context precision).
+    ragas = s.evaluate_answer(body.question, answer_text, r["hits"])
+    if ragas:
+        metrics.update(ragas)
 
     s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
 
@@ -307,7 +345,7 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
         ttft = None
         parts: list[str] = []
         try:
-            for delta in s.answer_stream(r["search_query"], r["hits"]):
+            for delta in s.answer_stream(r["search_query"], r["hits"], original_question=body.question):
                 if ttft is None:
                     ttft = time.perf_counter() - t_gen
                 parts.append(delta)
@@ -324,6 +362,11 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
             "generation_ms": int((time.perf_counter() - t_gen) * 1000),
             "confidence_pct": r["confidence_pct"],
         }
+        # Reference-free RAGAS scores, computed AFTER the last token so the live
+        # typing effect is never delayed by the extra judge calls.
+        ragas = s.evaluate_answer(body.question, answer_text, r["hits"])
+        if ragas:
+            metrics.update(ragas)
         # Persist the assistant turn only after the full answer is produced.
         s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
         yield sse({"type": "done", "metrics": metrics, "sources": r["sources"]})

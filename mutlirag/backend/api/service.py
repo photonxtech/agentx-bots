@@ -27,7 +27,7 @@ import time
 
 import config
 import chat_store
-from rag import chunking, generator, ingestion
+from rag import chunking, evaluation, generator, ingestion
 from rag.ingestion import Document
 from rag.vectorstore import VectorStore
 
@@ -209,6 +209,121 @@ class RagService:
             "message": f"Indexed {filename} — {indexed} chunk(s) for this chat.",
         }
 
+    def ingest_file_stream(self, chat_id: str, file_bytes: bytes, filename: str):
+        """Generator yielding real-time indexing progress events (0-100%, stage, ETA)."""
+        self.get_chat(chat_id)
+
+        start_time = time.time()
+        parse_times = []
+        last_time = [time.time()]
+
+        yield {
+            "status": "processing",
+            "stage": "parsing",
+            "current": 0,
+            "total": 1,
+            "percent": 0,
+            "eta_seconds": 0,
+            "message": f"Starting ingestion for {filename}..."
+        }
+
+        # Step 1: Parsing & OCR
+        events_queue = []
+
+        def on_parse_progress(current, total, msg):
+            now = time.time()
+            dt = now - last_time[0]
+            last_time[0] = now
+            if dt > 0.005 and current > 1:
+                parse_times.append(dt)
+            avg_page_time = (sum(parse_times) / len(parse_times)) if parse_times else 0.4
+            remaining_pages = max(0, total - current)
+            est_parse_rem = remaining_pages * avg_page_time
+
+            pct = int(round((current / max(1, total)) * 50))
+            est_embed_time = max(0.5, total * 0.04)
+            total_eta = round(est_parse_rem + est_embed_time, 1)
+
+            events_queue.append({
+                "status": "processing",
+                "stage": "parsing",
+                "current": current,
+                "total": total,
+                "percent": min(50, pct),
+                "eta_seconds": total_eta,
+                "message": f"{msg} (~{int(total_eta)}s left)"
+            })
+
+        docs = ingestion.ingest_cached(file_bytes, filename, progress_callback=on_parse_progress)
+
+        for ev in events_queue:
+            yield ev
+        events_queue.clear()
+
+        # Step 2: Chunking (50% mark)
+        yield {
+            "status": "processing",
+            "stage": "chunking",
+            "current": len(docs),
+            "total": len(docs),
+            "percent": 50,
+            "eta_seconds": round(max(0.5, len(docs) * 0.03), 1),
+            "message": f"Splitting document into search chunks..."
+        }
+
+        chunks = chunking.chunk_documents(docs)
+        for c in chunks:
+            c.meta["chat_id"] = chat_id
+
+        if not chunks:
+            yield {
+                "status": "error",
+                "percent": 100,
+                "message": "No extractable content found in the file."
+            }
+            return
+
+        # Step 3: Embedding generation (50% to 90%)
+        embed_start = time.time()
+
+        def on_embed_progress(current, total, msg):
+            pct = 50 + int(round((current / max(1, total)) * 40))
+            elapsed = time.time() - embed_start
+            rate = current / max(0.001, elapsed)
+            rem_chunks = max(0, total - current)
+            rem_eta = round(rem_chunks / max(0.1, rate), 1)
+            events_queue.append({
+                "status": "processing",
+                "stage": "embedding",
+                "current": current,
+                "total": total,
+                "percent": min(90, pct),
+                "eta_seconds": rem_eta,
+                "message": f"{msg} (~{int(rem_eta)}s left)"
+            })
+
+        with self._lock:
+            self.store.add(chunks, progress_callback=on_embed_progress)
+            self.store.save(config.INDEX_DIR)
+            indexed = self.store.size_for_chat(chat_id)
+
+        for ev in events_queue:
+            yield ev
+        events_queue.clear()
+
+        # Step 4: Completion (100%)
+        total_elapsed = round(time.time() - start_time, 1)
+        yield {
+            "status": "completed",
+            "stage": "indexing",
+            "current": len(chunks),
+            "total": len(chunks),
+            "percent": 100,
+            "eta_seconds": 0,
+            "chunks_indexed": len(chunks),
+            "message": f"Indexed {filename} — {indexed} chunk(s) ready in {total_elapsed}s!"
+        }
+
     def remove_file(self, chat_id: str, filename: str | None = None) -> str:
         """Remove this chat's file (defaults to whatever file it holds)."""
         self.get_chat(chat_id)
@@ -339,14 +454,37 @@ class RagService:
     # --------------------------------------------------------------------- #
     # Generation
     # --------------------------------------------------------------------- #
-    def answer_stream(self, search_query: str, hits):
+    def answer_stream(self, search_query: str, hits, original_question: str | None = None):
         """Yield answer text deltas from Groq (grounded in `hits`)."""
         return generator.answer(
             search_query,
             hits,
             model=config.DEFAULT_MODEL,
             temperature=config.DEFAULT_TEMPERATURE,
+            original_question=original_question,
         )
+
+    # --------------------------------------------------------------------- #
+    # Evaluation (reference-free RAGAS metrics, computed after the answer)
+    # --------------------------------------------------------------------- #
+    def evaluate_answer(self, question: str, answer: str, hits) -> dict | None:
+        """Score a produced answer on faithfulness / relevancy / context precision.
+
+        Uses the FULL text of the retrieved chunks (not the truncated snippets in
+        `sources`). Returns None when evaluation is disabled, there is nothing to
+        score, or the answer was a refusal — never raises.
+        """
+        if not config.RAGAS_ENABLED or not hits or not answer:
+            return None
+        if "don't know" in answer.lower():
+            return None
+        contexts = [doc.text for doc, _ in hits if doc.text]
+        if not contexts:
+            return None
+        try:
+            return evaluation.evaluate(question, answer, contexts)
+        except Exception:
+            return None
 
     # --------------------------------------------------------------------- #
     # Admin

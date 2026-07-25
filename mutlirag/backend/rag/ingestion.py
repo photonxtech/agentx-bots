@@ -25,14 +25,16 @@ class Document:
 # --------------------------------------------------------------------------- #
 # Plain text / Markdown
 # --------------------------------------------------------------------------- #
-def load_text(file_bytes: bytes, filename: str) -> list[Document]:
+def load_text(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Read a .txt/.md file as one Document; chunking will split it later."""
+    if progress_callback:
+        progress_callback(1, 1, "Reading text file")
     text = file_bytes.decode("utf-8", errors="replace").strip()
     if not text:
         return []
     return [
         Document(
-            text=f"[File: {filename}]\n{text}",
+            text=text,
             source=filename,
             kind="text",
             meta={"chars": len(text)},
@@ -80,8 +82,10 @@ def _extract_image_text(image) -> str:
     return "\n".join(p for p in parts if p).strip()
 
 
-def load_image(file_bytes: bytes, filename: str) -> list[Document]:
+def load_image(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Extract OCR text + a vision description from an image as one Document."""
+    if progress_callback:
+        progress_callback(1, 1, "Processing image & running OCR")
     from PIL import Image
 
     image = Image.open(io.BytesIO(file_bytes))
@@ -92,7 +96,7 @@ def load_image(file_bytes: bytes, filename: str) -> list[Document]:
 
     return [
         Document(
-            text=f"[Image: {filename}]\n{text}",
+            text=text,
             source=filename,
             kind="image",
             meta={"chars": len(text)},
@@ -109,7 +113,7 @@ def _safe_stem(filename: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in stem) or "pdf"
 
 
-def load_pdf(file_bytes: bytes, filename: str) -> list[Document]:
+def load_pdf(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Extract each PDF page as one Document, combining BOTH sources of text:
 
     1. The page's text layer (fast, accurate) — for normal typed paragraphs.
@@ -129,8 +133,11 @@ def load_pdf(file_bytes: bytes, filename: str) -> list[Document]:
 
     docs: list[Document] = []
     pdf = fitz.open(stream=file_bytes, filetype="pdf")
+    total_pages = len(pdf)
 
     for page_num, page in enumerate(pdf, 1):
+        if progress_callback:
+            progress_callback(page_num, total_pages, f"Parsing PDF page {page_num} of {total_pages}")
         text = page.get_text("text").strip()
 
         # --- OCR + save every embedded image on this page ---
@@ -151,12 +158,22 @@ def load_pdf(file_bytes: bytes, filename: str) -> list[Document]:
 
         combined = "\n".join(p for p in [text, *image_texts, rendered_ocr] if p).strip()
         if not combined:
-            continue
+            # The page has image(s) but we got no text from them (OCR empty and
+            # the vision model was unavailable/rate-limited). Keep a placeholder
+            # so the page is never silently dropped — it stays retrievable and
+            # its saved image is still referenced.
+            if saved_paths:
+                combined = (
+                    f"[Image on page {page_num} of {filename} — no text detected; "
+                    "a visual description was unavailable at ingestion time.]"
+                )
+            else:
+                continue
 
         used_ocr = bool(image_texts or rendered_ocr)
         docs.append(
             Document(
-                text=f"[PDF: {filename}, Page: {page_num}]\n{combined}",
+                text=combined,
                 source=filename,
                 kind="pdf",
                 meta={"page": page_num, "ocr": used_ocr, "images": saved_paths},
@@ -216,7 +233,7 @@ def _ocr_pdf_page(page) -> str:
 # --------------------------------------------------------------------------- #
 # Word .docx — paragraphs + tables + OCR of embedded images
 # --------------------------------------------------------------------------- #
-def load_docx(file_bytes: bytes, filename: str) -> list[Document]:
+def load_docx(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Extract a Word document as one Document, combining:
 
     1. Paragraph text.
@@ -226,6 +243,8 @@ def load_docx(file_bytes: bytes, filename: str) -> list[Document]:
 
     Chunking splits the combined text later, so we return a single Document.
     """
+    if progress_callback:
+        progress_callback(1, 1, "Parsing Word document")
     import docx  # python-docx, imported lazily
 
     os.makedirs(config.EXTRACTED_IMAGES_DIR, exist_ok=True)
@@ -268,7 +287,7 @@ def load_docx(file_bytes: bytes, filename: str) -> list[Document]:
 
     return [
         Document(
-            text=f"[DOCX: {filename}]\n{combined}",
+            text=combined,
             source=filename,
             kind="docx",
             meta={"ocr": bool(saved_paths), "images": saved_paths},
@@ -279,7 +298,7 @@ def load_docx(file_bytes: bytes, filename: str) -> list[Document]:
 # --------------------------------------------------------------------------- #
 # PowerPoint .pptx — one Document per slide (text + tables + image OCR/vision)
 # --------------------------------------------------------------------------- #
-def load_pptx(file_bytes: bytes, filename: str) -> list[Document]:
+def load_pptx(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Extract each slide as one Document: text frames, tables (flattened
     row by row), and embedded pictures (saved + OCR'd + vision-described)."""
     from pptx import Presentation  # python-pptx, imported lazily
@@ -289,8 +308,11 @@ def load_pptx(file_bytes: bytes, filename: str) -> list[Document]:
 
     prs = Presentation(io.BytesIO(file_bytes))
     docs: list[Document] = []
+    total_slides = len(prs.slides)
 
     for slide_num, slide in enumerate(prs.slides, 1):
+        if progress_callback:
+            progress_callback(slide_num, total_slides, f"Parsing slide {slide_num} of {total_slides}")
         parts: list[str] = []
         saved_paths: list[str] = []
         img_i = 0
@@ -323,7 +345,7 @@ def load_pptx(file_bytes: bytes, filename: str) -> list[Document]:
             continue
         docs.append(
             Document(
-                text=f"[PPTX: {filename}, Slide: {slide_num}]\n{combined}",
+                text=combined,
                 source=filename,
                 kind="pptx",
                 meta={"slide": slide_num, "images": saved_paths},
@@ -332,26 +354,26 @@ def load_pptx(file_bytes: bytes, filename: str) -> list[Document]:
     return docs
 
 
-def ingest(file_bytes: bytes, filename: str) -> list[Document]:
+def ingest(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Dispatch a single uploaded file to the right loader by extension."""
     lower = filename.lower()
     if lower.endswith((".txt", ".md")):
-        return load_text(file_bytes, filename)
+        return load_text(file_bytes, filename, progress_callback=progress_callback)
     if lower.endswith((".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp")):
-        return load_image(file_bytes, filename)
+        return load_image(file_bytes, filename, progress_callback=progress_callback)
     if lower.endswith(".pdf"):
-        return load_pdf(file_bytes, filename)
+        return load_pdf(file_bytes, filename, progress_callback=progress_callback)
     if lower.endswith(".docx"):
-        return load_docx(file_bytes, filename)
+        return load_docx(file_bytes, filename, progress_callback=progress_callback)
     if lower.endswith(".pptx"):
-        return load_pptx(file_bytes, filename)
+        return load_pptx(file_bytes, filename, progress_callback=progress_callback)
     raise ValueError(f"Unsupported file type: {filename}")
 
 
 # --------------------------------------------------------------------------- #
 # Per-file cache — skip OCR + vision when the same content is seen again
 # --------------------------------------------------------------------------- #
-def ingest_cached(file_bytes: bytes, filename: str) -> list[Document]:
+def ingest_cached(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """`ingest`, but memoized on the file's content hash.
 
     OCR and vision calls are the slow/expensive part of ingestion; the cache
@@ -371,14 +393,21 @@ def ingest_cached(file_bytes: bytes, filename: str) -> list[Document]:
     if os.path.exists(cache_path):
         try:
             with open(cache_path, "rb") as f:
-                return pickle.load(f)
+                res = pickle.load(f)
+                if progress_callback:
+                    progress_callback(len(res), max(1, len(res)), "Loaded from cache")
+                return res
         except Exception:
             pass  # unreadable cache -> re-ingest below
 
-    docs = ingest(file_bytes, filename)
-    try:
-        with open(cache_path, "wb") as f:
-            pickle.dump(docs, f)
-    except Exception:
-        pass  # caching is best-effort; never fail ingestion over it
+    docs = ingest(file_bytes, filename, progress_callback=progress_callback)
+    # Never cache an empty result: an image that yielded nothing is usually a
+    # transient failure (vision model down/rate-limited), and caching [] would
+    # freeze that failure so re-uploading after a fix still returns nothing.
+    if docs:
+        try:
+            with open(cache_path, "wb") as f:
+                pickle.dump(docs, f)
+        except Exception:
+            pass  # caching is best-effort; never fail ingestion over it
     return docs

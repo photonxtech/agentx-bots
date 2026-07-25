@@ -68,6 +68,12 @@
   .msg.user .bubble { background: var(--user); }
   .msg.assistant .bubble { background: var(--assist); }
   .metrics { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .ragas { font-size: 11px; margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .ragas .score { color: var(--muted); }
+  .ragas .score b { font-weight: 600; }
+  .ragas .g { color: #16a34a; }
+  .ragas .y { color: #ca8a04; }
+  .ragas .r { color: #dc2626; }
   .sources { margin-top: 8px; font-size: 13px; }
   .sources details { background: var(--panel2); border-radius: 8px; padding: 8px 12px; }
   .sources summary { cursor: pointer; color: var(--muted); }
@@ -300,6 +306,24 @@ function renderMessages() {
   box.scrollTop = box.scrollHeight;
 }
 
+// Build a RAGAS score line from a metrics object, or null if no scores present.
+// Each score is 0..1; color-coded green/amber/red by quality thresholds.
+function renderRagas(mt) {
+  const defs = [
+    ["Faithfulness", mt.faithfulness],
+    ["Answer relevancy", mt.answer_relevancy],
+    ["Context precision", mt.context_precision],
+  ].filter(([, v]) => v !== null && v !== undefined);
+  if (!defs.length) return null;
+  const cls = v => (v >= 0.7 ? "g" : v >= 0.4 ? "y" : "r");
+  const d = document.createElement("div");
+  d.className = "ragas";
+  d.innerHTML = "📊 " + defs
+    .map(([label, v]) => `<span class="score">${label}: <b class="${cls(v)}">${(v * 100).toFixed(0)}%</b></span>`)
+    .join("");
+  return d;
+}
+
 function renderMessage(m) {
   const el = document.createElement("div");
   el.className = "msg " + m.role;
@@ -311,6 +335,8 @@ function renderMessage(m) {
     d.className = "metrics";
     d.textContent = `⚡ Rewrite ${mt.rewrite_ms}ms · Search ${mt.search_ms}ms · TTFT ${mt.ttft_ms}ms · Gen ${mt.generation_ms}ms · Confidence ${mt.confidence_pct}%`;
     el.appendChild(d);
+    const rag = renderRagas(mt);
+    if (rag) el.appendChild(rag);
   }
   if (m.sources && m.sources.length) el.appendChild(renderSources(m.sources));
   return el;
@@ -334,12 +360,72 @@ function renderSources(sources) {
 async function uploadFile(ev) {
   const file = ev.target.files[0];
   if (!file) return;
-  $("uploadArea").innerHTML = `⏳ Uploading & indexing <b>${escapeHtml(file.name)}</b> …`;
+
+  // Render a beautiful, premium progress UI inside #uploadArea
+  $("uploadArea").innerHTML = `
+    <div style="padding: 6px 4px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span id="progressMsg" style="font-size: 14px; font-weight: 600; color: var(--text);">
+          Ingesting <b>${escapeHtml(file.name)}</b>...
+        </span>
+        <span id="progressPct" style="font-size: 14px; font-weight: 700; color: var(--accent);">0%</span>
+      </div>
+      <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.06); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);">
+        <div id="progressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #06b6d4); box-shadow: 0 0 10px rgba(59, 130, 246, 0.5); transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); border-radius: 6px;"></div>
+      </div>
+      <div id="progressStage" style="font-size: 12px; color: var(--muted); margin-top: 8px; display: flex; justify-content: space-between;">
+        <span>Initializing pipeline...</span>
+        <span id="progressETA" style="font-weight: 500; color: var(--accent);"></span>
+      </div>
+    </div>
+  `;
+
   const fd = new FormData();
   fd.append("file", file);
+
   try {
-    const r = await (await api(`/chats/${state.currentId}/upload`, { method: "POST", body: fd })).json();
-    toast(r.message);
+    const resp = await fetch(`/chats/${state.currentId}/upload/stream`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try { detail = (await resp.json()).detail || detail; } catch (e) {}
+      throw new Error(detail);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const evt = JSON.parse(line.slice(6));
+        if (evt.status === "processing" || evt.status === "completed") {
+          const pct = evt.percent || 0;
+          $("progressBar").style.width = pct + "%";
+          $("progressPct").textContent = pct + "%";
+          $("progressStage").querySelector("span:first-child").textContent = evt.message || `${evt.stage}...`;
+          if (evt.eta_seconds > 0) {
+            $("progressETA").textContent = `ETA: ~${Math.round(evt.eta_seconds)}s`;
+          } else {
+            $("progressETA").textContent = "";
+          }
+          if (evt.status === "completed") {
+            toast(evt.message);
+          }
+        } else if (evt.status === "error") {
+          throw new Error(evt.message || "Failed to index file.");
+        }
+      }
+    }
+
     await selectChat(state.currentId);
     await loadChats();
   } catch (e) {
@@ -416,6 +502,8 @@ async function ask() {
             d.className = "metrics";
             d.textContent = `⚡ Rewrite ${mt.rewrite_ms}ms · Search ${mt.search_ms}ms · TTFT ${mt.ttft_ms}ms · Gen ${mt.generation_ms}ms · Confidence ${mt.confidence_pct}%`;
             aEl.appendChild(d);
+            const rag = renderRagas(mt);
+            if (rag) aEl.appendChild(rag);
           }
           const isDK = answer.toLowerCase().includes("don't know");
           if (evt.sources && evt.sources.length && !isDK) aEl.appendChild(renderSources(evt.sources));

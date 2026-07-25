@@ -139,7 +139,7 @@ class _BaseStore:
         return 0
 
     # -- backend hooks (overridden) -- #
-    def add(self, docs: list[Document]) -> None:  # pragma: no cover - abstract
+    def add(self, docs: list[Document], progress_callback=None) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 
     def remove_source(
@@ -235,10 +235,20 @@ class _WeaviateStore(_BaseStore):
         )
         self._rebuild_bm25()
 
-    def add(self, docs: list[Document]) -> None:
+    def add(self, docs: list[Document], progress_callback=None) -> None:
         if not docs:
             return
-        vectors = embed([d.text for d in docs])
+        batch_size = 32
+        vectors_list = []
+        total_docs = len(docs)
+        for i in range(0, total_docs, batch_size):
+            batch = docs[i:i + batch_size]
+            batch_vecs = embed([d.text for d in batch])
+            vectors_list.append(batch_vecs)
+            if progress_callback:
+                processed = min(i + batch_size, total_docs)
+                progress_callback(processed, total_docs, f"Embedding chunk {processed} of {total_docs}")
+        vectors = np.vstack(vectors_list) if vectors_list else np.empty((0, self._dim), dtype="float32")
 
         with self.collection.batch.dynamic() as batch:
             for doc, vector in zip(docs, vectors):
@@ -375,10 +385,20 @@ class _ChromaStore(_BaseStore):
 
         self._rebuild_bm25()
 
-    def add(self, docs: list[Document]) -> None:
+    def add(self, docs: list[Document], progress_callback=None) -> None:
         if not docs:
             return
-        vectors = embed([d.text for d in docs])
+        batch_size = 32
+        vectors_list = []
+        total_docs = len(docs)
+        for i in range(0, total_docs, batch_size):
+            batch = docs[i:i + batch_size]
+            batch_vecs = embed([d.text for d in batch])
+            vectors_list.append(batch_vecs)
+            if progress_callback:
+                processed = min(i + batch_size, total_docs)
+                progress_callback(processed, total_docs, f"Embedding chunk {processed} of {total_docs}")
+        vectors = np.vstack(vectors_list) if vectors_list else np.empty((0, self._dim), dtype="float32")
 
         ids, embeddings, documents, metadatas = [], [], [], []
         for doc, vector in zip(docs, vectors):

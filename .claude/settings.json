@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -c \"from api.main import app; print\\('APP OK'\\); print\\('routes:', [r.path for r in app.routes if hasattr\\(r,'path'\\)]\\)\")",
+      "Bash(.venv/Scripts/python.exe \"C:/Users/sahit/AppData/Local/Temp/claude/c--agentx-bots/99c9a9c3-c6dd-4f48-aae8-a5da6602ddad/scratchpad/smoke_test.py\")",
+      "Read(//c/Users/sahit/Downloads/mutlirag/mutlirag/**)",
+      "Bash(.venv/Scripts/python.exe -m uvicorn api.main:app --port 8766 --log-level info)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(../.venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}

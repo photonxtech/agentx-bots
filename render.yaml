@@ -1,0 +1,29 @@
+# Render Blueprint for Multi-RAG.
+# Deploy via Render → "New +" → "Blueprint" and point it at this repo, OR just
+# copy these values into the manual "New Web Service" form (see README/chat steps).
+#
+# NOTE: PyTorch (via easyocr + sentence-transformers) needs memory. The free/starter
+# 512 MB plans will run out of memory — use "standard" (2 GB) or larger.
+services:
+  - type: web
+    name: multirag
+    runtime: python
+    rootDir: mutlirag                     # the app lives in the mutlirag/ subfolder
+    plan: standard                        # >=2 GB RAM; free/starter will OOM on PyTorch
+    branch: main                          # change to the branch you deploy from
+    # Install CPU-only PyTorch first (avoids the huge CUDA build), then the rest.
+    buildCommand: "pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install -r backend/requirements.txt"
+    # Bind to 0.0.0.0 and Render's $PORT; load the backend package via --app-dir.
+    startCommand: "uvicorn api.main:app --host 0.0.0.0 --port $PORT --app-dir backend"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: GROQ_API_KEY
+        sync: false                       # set the real value in the dashboard (secret)
+      - key: MULTIRAG_DATA_DIR
+        value: /var/data                  # persist index + chats on the disk below
+    # Persistent disk so the ChromaDB index + chat history survive restarts.
+    disk:
+      name: multirag-data
+      mountPath: /var/data
+      sizeGB: 1
