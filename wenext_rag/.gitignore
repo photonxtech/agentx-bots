@@ -1,0 +1,40 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.*
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local app data and generated artifacts
+chroma_db/
+data/
+*.sqlite3
+*.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Packaging/build outputs
+build/
+dist/
+*.egg-info/
