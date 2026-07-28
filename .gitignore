@@ -1,0 +1,6 @@
+.env
+  __pycache__/                                                                                                                       
+  *.pyc                                                                                                                            
+  hrms_sessions.json
+  hrms_bot.log
+  hr_agent.db

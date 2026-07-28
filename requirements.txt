@@ -1,0 +1,11 @@
+streamlit>=1.35.0
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-openai>=0.1.0
+openai>=1.30.0
+python-dotenv>=1.0.0
+certifi>=2024.0.0
+slack-bolt>=1.18.0
+slack-sdk>=3.27.0
+mysql-connector-python>=8.3.0
+langsmith>=0.1.0
