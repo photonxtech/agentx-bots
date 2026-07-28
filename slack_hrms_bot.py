@@ -725,57 +725,133 @@ def create_hrms_tools(token: str) -> list:
     ]
 
 # ---------------------------------------------------------------------------
-# Agent runner
+# Multi-Agent System
+#
+# Architecture:
+#   User Message
+#       ↓
+#   [Orchestrator Agent]  — reads message + history, picks the right specialist
+#       ↓
+#   ┌──────────┬─────────────┬──────────┬─────────────┬──────────┬────────────────┐
+#   ↓          ↓             ↓          ↓             ↓          ↓
+# [Leave]  [Attendance]  [Payroll]  [WFH/Claims]  [Info]  [Travel/Grievance]
+# Agent      Agent         Agent      Agent         Agent      Agent
+#       ↓
+#   Final reply → Slack
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt(employee_name: str) -> str:
+def _date_context() -> dict:
+    """Returns today's date and upcoming weekday map."""
     today = datetime.now()
     weekdays = {}
     for i in range(1, 8):
         d = today + timedelta(days=i)
         weekdays[d.strftime("%A")] = d.strftime("%Y-%m-%d")
+    return {"today": today, "weekdays": weekdays}
 
-    return f"""You are an HR assistant for *{employee_name}*, helping them manage their HR tasks through Slack.
 
-Today is {today.strftime("%A, %Y-%m-%d")}.
-Upcoming dates: {", ".join(f"{k} = {v}" for k, v in weekdays.items())}
+_SLACK_FORMAT_RULES = """\
+Format rules (Slack mrkdwn — strictly follow):
+• Bold: *text*  (single asterisk ONLY — never **double**)
+• Bullets: • character (never - or *)
+• Italic: _text_
+• Never show raw JSON — always summarise naturally."""
 
-You have 24 tools covering: profile, leave, attendance, payslips, WFH, claims, notifications, holidays, shift, benefits, travel, regularization, grievances.
 
-Key rules:
-1. ALWAYS call get_leave_balance before apply_leave to get the leave_id.
-2. ALWAYS call get_claim_types before submit_claim to get the claim_type_id.
-3. Resolve all relative dates ("tomorrow", "next Monday") to YYYY-MM-DD using today's date.
-4. Be concise and professional. Format ALL responses using Slack mrkdwn ONLY:
-   - Bold: *text* (single asterisk — NEVER use **double**)
-   - Bullet points: • (bullet character — NEVER use - or *)
-   - Italic: _text_
-   - Example leave balance format:
-     *Your Leave Balance*
-     • *Privilege Leave* — Available: 3 | Used: 0 | Total: 3
-     • *Sick Leave* — Available: 3 | Used: 0 | Total: 3
-5. If an action succeeds (leave applied, WFH submitted, etc.), confirm the key details clearly.
-6. If an error occurs, explain it in plain language.
-7. Never expose raw JSON to the user — always summarise it naturally.
-8. If get_public_holidays returns no results for a year, do NOT silently fall back. Tell the user clearly: "No holidays have been added for [year] in the HRMS system yet." Then ask if they want to see a different year's holidays instead. Only fetch another year if the user explicitly asks for it.
-9. You have conversation history above — use it to understand follow-up questions like "then the previous year", "what about last year", "cancel that", etc.
-10. STRICT SCOPE: You are ONLY an HR assistant. If the user asks anything not related to HR (leaves, attendance, payslips, holidays, claims, profile, WFH, shifts, benefits, travel, grievances), politely decline and say you can only help with HR-related tasks."""
+# ── Agent Registry ──────────────────────────────────────────────────────────
+# Each entry defines: which tools the specialist has + its focused system prompt.
 
+AGENT_REGISTRY = {
+
+    "leave_agent": {
+        "description": "Handles everything about leaves: check balance, apply leave, cancel leave, view leave history",
+        "tools": ["get_leave_balance", "get_my_leaves", "apply_leave", "cancel_leave"],
+        "prompt": lambda name, ctx: f"""You are the *Leave Management Agent* for {name}.
+Today is {ctx['today'].strftime("%A, %Y-%m-%d")}.
+Upcoming dates: {", ".join(f"{k}={v}" for k, v in ctx['weekdays'].items())}
+
+Rules:
+1. ALWAYS call get_leave_balance before apply_leave to find the leave_id.
+2. Resolve all relative dates to YYYY-MM-DD.
+3. If applying leave succeeds, confirm leave type, dates, and pending approval status.
+4. {_SLACK_FORMAT_RULES}""",
+    },
+
+    "attendance_agent": {
+        "description": "Handles attendance: monthly summary, today's check-in/out swipe times, mark attendance, regularization requests",
+        "tools": ["get_attendance_summary", "get_swipe_info", "checkin_checkout", "get_regularizations"],
+        "prompt": lambda name, ctx: f"""You are the *Attendance Agent* for {name}.
+Today is {ctx['today'].strftime("%A, %Y-%m-%d")}.
+
+Rules:
+1. For check-in/out, confirm the action and work_from location clearly.
+2. For monthly summary, present present/absent/late/half-day counts clearly.
+3. {_SLACK_FORMAT_RULES}""",
+    },
+
+    "payroll_agent": {
+        "description": "Handles payslips and salary information",
+        "tools": ["get_payslips"],
+        "prompt": lambda name, ctx: f"""You are the *Payroll Agent* for {name}.
+Today is {ctx['today'].strftime("%A, %Y-%m-%d")}.
+
+Rules:
+1. Show month, year, gross, net salary, and status for each payslip.
+2. {_SLACK_FORMAT_RULES}""",
+    },
+
+    "wfh_claims_agent": {
+        "description": "Handles Work From Home requests and expense claims",
+        "tools": ["get_wfh_list", "apply_wfh", "get_claim_types", "get_my_claims", "submit_claim"],
+        "prompt": lambda name, ctx: f"""You are the *WFH & Claims Agent* for {name}.
+Today is {ctx['today'].strftime("%A, %Y-%m-%d")}.
+Upcoming dates: {", ".join(f"{k}={v}" for k, v in ctx['weekdays'].items())}
+
+Rules:
+1. ALWAYS call get_claim_types before submit_claim to find claim_type_id.
+2. Resolve all relative dates to YYYY-MM-DD.
+3. Confirm WFH/claim details clearly on success.
+4. {_SLACK_FORMAT_RULES}""",
+    },
+
+    "info_agent": {
+        "description": "Handles profile, team info, special events, notifications, public holidays, shift timings, benefits",
+        "tools": ["get_my_profile", "get_my_team", "get_special_events",
+                  "get_notifications", "get_public_holidays", "get_my_shift", "get_my_benefits"],
+        "prompt": lambda name, ctx: f"""You are the *Information Agent* for {name}.
+Today is {ctx['today'].strftime("%A, %Y-%m-%d")}.
+
+Rules:
+1. If get_public_holidays returns no data for a year, clearly say "No holidays added for [year] yet."
+   Ask if the user wants a different year — only fetch another year if they confirm.
+2. {_SLACK_FORMAT_RULES}""",
+    },
+
+    "travel_grievance_agent": {
+        "description": "Handles travel requests and grievances",
+        "tools": ["get_my_travel_requests", "get_regularizations", "get_my_grievances", "raise_grievance"],
+        "prompt": lambda name, ctx: f"""You are the *Travel & Grievance Agent* for {name}.
+Today is {ctx['today'].strftime("%A, %Y-%m-%d")}.
+
+Rules:
+1. For grievances, confirm title, category, and priority before submitting.
+2. {_SLACK_FORMAT_RULES}""",
+    },
+}
+
+
+# ── History loader ───────────────────────────────────────────────────────────
 
 def _load_history(slack_user_id: str, limit: int = 10) -> list:
-    """
-    Load the last `limit` messages from MongoDB for this user
-    and convert them to LangChain message objects for context.
-    """
+    """Load last N messages from MongoDB as LangChain message objects."""
     if _conversations is None:
         return []
     try:
         doc = _conversations.find_one({"slack_user_id": slack_user_id})
         if not doc:
             return []
-        recent = doc.get("messages", [])[-limit:]
         history = []
-        for m in recent:
+        for m in doc.get("messages", [])[-limit:]:
             if m["role"] == "user":
                 history.append(HumanMessage(content=m["text"]))
             elif m["role"] == "bot":
@@ -786,50 +862,111 @@ def _load_history(slack_user_id: str, limit: int = 10) -> list:
         return []
 
 
-def run_hrms_agent(user_message: str, token: str, employee_name: str, slack_user_id: str = "") -> str:
-    """
-    Agentic loop:
-      1. LLM decides which tool(s) to call
-      2. Tool results fed back
-      3. LLM may call more tools or produce final answer
-      4. Repeats until no more tool calls (max 8 iterations)
-    Includes the last 10 messages as conversation history for context.
-    """
-    log.info("AGENT start  employee=%s  message=%r", employee_name, user_message[:120])
+# ── Specialist Agent runner ──────────────────────────────────────────────────
 
-    tools          = create_hrms_tools(token)
-    tools_map      = {t.name: t for t in tools}
-    llm            = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    llm_with_tools = llm.bind_tools(tools)
+def _run_specialist(agent_name: str, user_message: str, all_tools: dict,
+                    employee_name: str, history: list) -> str:
+    """Run a specialist agent with only its assigned tools."""
+    spec   = AGENT_REGISTRY[agent_name]
+    ctx    = _date_context()
+    prompt = spec["prompt"](employee_name, ctx)
 
-    # Build messages: system prompt + conversation history + current message
-    history  = _load_history(slack_user_id) if slack_user_id else []
-    messages = [SystemMessage(content=_build_system_prompt(employee_name))] \
-               + history \
-               + [HumanMessage(content=user_message)]
+    # Give this specialist only its own tools
+    agent_tools  = [all_tools[t] for t in spec["tools"] if t in all_tools]
+    tools_map    = {t.name: t for t in agent_tools}
+    llm          = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm_with_tools = llm.bind_tools(agent_tools)
+
+    messages = [SystemMessage(content=prompt)] + history + [HumanMessage(content=user_message)]
+
+    log.info("SPECIALIST %s  starting  employee=%s", agent_name, employee_name)
 
     for iteration in range(8):
-        log.debug("AGENT iteration %d", iteration + 1)
         response = llm_with_tools.invoke(messages)
         messages.append(response)
 
         if not response.tool_calls:
-            log.info("AGENT done  iterations=%d  employee=%s", iteration + 1, employee_name)
+            log.info("SPECIALIST %s  done  iterations=%d", agent_name, iteration + 1)
             return response.content or "Done."
 
         for tc in response.tool_calls:
-            log.info("TOOL call  name=%s  args=%s", tc["name"], json.dumps(tc["args"])[:200])
+            log.info("TOOL call  agent=%s  tool=%s  args=%s",
+                     agent_name, tc["name"], json.dumps(tc["args"])[:200])
             fn = tools_map.get(tc["name"])
             try:
                 result = fn.invoke(tc["args"]) if fn else f"Unknown tool: {tc['name']}"
-                log.info("TOOL result  name=%s  preview=%s", tc["name"], str(result)[:150])
+                log.info("TOOL result  tool=%s  preview=%s", tc["name"], str(result)[:150])
             except Exception as e:
                 result = f"Tool error: {str(e)}"
-                log.error("TOOL error  name=%s  error=%s", tc["name"], e, exc_info=True)
+                log.error("TOOL error  tool=%s  error=%s", tc["name"], e, exc_info=True)
             messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
 
-    log.warning("AGENT max iterations reached  employee=%s", employee_name)
-    return "I had trouble completing your request. Please try again."
+    log.warning("SPECIALIST %s  max iterations reached", agent_name)
+    return "I had trouble processing your request. Please try again."
+
+
+# ── Orchestrator ─────────────────────────────────────────────────────────────
+
+_ORCHESTRATOR_PROMPT = """You are the Orchestrator for an HR assistant system.
+Your ONLY job is to read the user's message and decide which specialist agent should handle it.
+
+Available agents:
+{agents}
+
+Rules:
+1. Reply with ONLY the agent name — nothing else. No explanation.
+2. If the message is completely unrelated to HR, reply: out_of_scope
+3. Use conversation history to resolve follow-up messages (e.g. "cancel that" → look at previous topic).
+
+Reply with exactly one of: {agent_names}  OR  out_of_scope"""
+
+_OUT_OF_SCOPE_MSG = (
+    "I'm your HR assistant and can only help with HR-related topics such as "
+    "leaves, attendance, payslips, WFH, claims, holidays, profile, benefits, travel, or grievances. "
+    "Please ask me something HR-related!"
+)
+
+
+def orchestrate(user_message: str, token: str, employee_name: str, slack_user_id: str = "") -> str:
+    """
+    Multi-Agent Orchestration:
+      1. Orchestrator LLM reads message + history → picks specialist agent
+      2. Specialist agent runs with its own focused tools
+      3. Returns final response
+    """
+    log.info("ORCHESTRATOR start  employee=%s  message=%r", employee_name, user_message[:120])
+
+    history   = _load_history(slack_user_id) if slack_user_id else []
+    all_tools = {t.name: t for t in create_hrms_tools(token)}
+
+    # Build agent list description for orchestrator
+    agent_list = "\n".join(
+        f"- {name}: {spec['description']}"
+        for name, spec in AGENT_REGISTRY.items()
+    )
+    agent_names = ", ".join(AGENT_REGISTRY.keys())
+
+    orchestrator_prompt = _ORCHESTRATOR_PROMPT.format(
+        agents=agent_list, agent_names=agent_names
+    )
+
+    # Orchestrator decides which agent
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    routing_messages = (
+        [SystemMessage(content=orchestrator_prompt)]
+        + history
+        + [HumanMessage(content=user_message)]
+    )
+    routing_response = llm.invoke(routing_messages)
+    chosen = routing_response.content.strip().lower()
+
+    log.info("ORCHESTRATOR routed → %s  employee=%s", chosen, employee_name)
+
+    if chosen == "out_of_scope" or chosen not in AGENT_REGISTRY:
+        return _OUT_OF_SCOPE_MSG
+
+    # Run the chosen specialist
+    return _run_specialist(chosen, user_message, all_tools, employee_name, history)
 
 # ---------------------------------------------------------------------------
 # Slack helpers
@@ -947,7 +1084,7 @@ def handle_dm(message, say):
                  emp_id=session.get("emp_id", ""))
 
     try:
-        reply = run_hrms_agent(
+        reply = orchestrate(
             user_message=text,
             token=session["token"],
             employee_name=session.get("name", "Employee"),

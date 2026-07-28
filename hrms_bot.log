@@ -1,0 +1,276 @@
+2026-07-28 13:08:19  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:08:19  INFO      hrms_bot  |  HRMS AI Agent starting
+2026-07-28 13:08:19  INFO      hrms_bot  |  API base : http://localhost:9091/api
+2026-07-28 13:08:19  INFO      hrms_bot  |  Log file : /Users/abhi/Documents/ai agent/hr_workflow_agent/hrms_bot.log
+2026-07-28 13:08:19  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:08:20  INFO      slack_bolt.App  |  A new session has been established (session id: 0d451890-23f1-4df0-9595-1e0c594f8d04)
+2026-07-28 13:08:20  INFO      slack_bolt.App  |  ⚡️ Bolt app is running!
+2026-07-28 13:08:20  INFO      slack_bolt.App  |  Starting to receive messages from a new connection (session id: 0d451890-23f1-4df0-9595-1e0c594f8d04)
+2026-07-28 13:11:53  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:11:53  INFO      hrms_bot  |  HRMS AI Agent starting
+2026-07-28 13:11:53  INFO      hrms_bot  |  API base : http://localhost:9091/api
+2026-07-28 13:11:53  INFO      hrms_bot  |  Log file : /Users/abhi/Documents/ai agent/hr_workflow_agent/hrms_bot.log
+2026-07-28 13:11:53  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:11:54  INFO      slack_bolt.App  |  A new session has been established (session id: e77b5162-b462-4090-9865-296eecddaee8)
+2026-07-28 13:11:54  INFO      slack_bolt.App  |  ⚡️ Bolt app is running!
+2026-07-28 13:11:54  INFO      slack_bolt.App  |  Starting to receive messages from a new connection (session id: e77b5162-b462-4090-9865-296eecddaee8)
+2026-07-28 13:12:01  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:12:01  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:12:03  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:12:03  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={}
+2026-07-28 13:12:03  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:12:03  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:12:03  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=No upcoming holidays found.
+2026-07-28 13:12:04  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:12:04  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:14:15  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='ok then the last years?'
+2026-07-28 13:14:15  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='ok then the last years?'
+2026-07-28 13:14:16  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:14:16  INFO      hrms_bot  |  AGENT done  iterations=1  employee=Abhizgn	 Balabadra
+2026-07-28 13:23:37  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:23:38  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:23:39  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:23:39  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={}
+2026-07-28 13:23:39  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:23:39  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:23:39  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=No upcoming holidays found.
+2026-07-28 13:23:40  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:23:40  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:23:45  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='ok then the last years'
+2026-07-28 13:23:45  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='ok then the last years'
+2026-07-28 13:23:47  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:23:47  INFO      hrms_bot  |  AGENT done  iterations=1  employee=Abhizgn	 Balabadra
+2026-07-28 13:24:30  INFO      hrms_bot  |  MongoDB connected — hrms_bot.conversations
+2026-07-28 13:24:33  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:24:33  INFO      hrms_bot  |  HRMS AI Agent starting
+2026-07-28 13:24:33  INFO      hrms_bot  |  API base : http://localhost:9091/api
+2026-07-28 13:24:33  INFO      hrms_bot  |  Log file : /Users/abhi/Documents/ai agent/hr_workflow_agent/hrms_bot.log
+2026-07-28 13:24:33  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:24:34  INFO      slack_bolt.App  |  A new session has been established (session id: ff159267-c6db-490f-a8e1-30adffcfe7c5)
+2026-07-28 13:24:34  INFO      slack_bolt.App  |  ⚡️ Bolt app is running!
+2026-07-28 13:24:34  INFO      slack_bolt.App  |  Starting to receive messages from a new connection (session id: ff159267-c6db-490f-a8e1-30adffcfe7c5)
+2026-07-28 13:24:39  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:24:39  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:24:41  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:24:41  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={}
+2026-07-28 13:24:41  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:24:41  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:24:41  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=No upcoming holidays found.
+2026-07-28 13:24:42  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:24:42  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:24:59  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='then the before year'
+2026-07-28 13:24:59  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='then the before year'
+2026-07-28 13:25:01  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:25:01  INFO      hrms_bot  |  AGENT done  iterations=1  employee=Abhizgn	 Balabadra
+2026-07-28 13:25:54  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='prime minister of india'
+2026-07-28 13:25:55  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='prime minister of india'
+2026-07-28 13:25:56  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:25:56  INFO      hrms_bot  |  AGENT done  iterations=1  employee=Abhizgn	 Balabadra
+2026-07-28 13:27:44  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:27:45  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:27:46  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:27:46  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={}
+2026-07-28 13:27:46  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:27:46  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:27:46  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=No upcoming holidays found.
+2026-07-28 13:27:47  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:27:47  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:27:54  INFO      hrms_bot  |  MongoDB connected — hrms_bot.conversations
+2026-07-28 13:27:56  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:27:56  INFO      hrms_bot  |  HRMS AI Agent starting
+2026-07-28 13:27:56  INFO      hrms_bot  |  API base : http://localhost:9091/api
+2026-07-28 13:27:56  INFO      hrms_bot  |  Log file : /Users/abhi/Documents/ai agent/hr_workflow_agent/hrms_bot.log
+2026-07-28 13:27:56  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:27:57  INFO      slack_bolt.App  |  A new session has been established (session id: 02e3ea12-ae7b-4e92-a767-46be4c0a16c3)
+2026-07-28 13:27:57  INFO      slack_bolt.App  |  ⚡️ Bolt app is running!
+2026-07-28 13:27:57  INFO      slack_bolt.App  |  Starting to receive messages from a new connection (session id: 02e3ea12-ae7b-4e92-a767-46be4c0a16c3)
+2026-07-28 13:27:58  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:27:59  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:28:00  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:28:00  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={"year": 2026}
+2026-07-28 13:28:00  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:28:00  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:28:00  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=No holidays found for 2026. Try calling again with a different year.
+2026-07-28 13:28:01  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:28:01  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={"year": 2025}
+2026-07-28 13:28:01  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:28:01  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:28:01  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=[
+  {
+    "name": "Makara Sankranti",
+    "date": "2025-01-14"
+  },
+  {
+    "name": "Republic Day",
+    "date": "2025-01-26"
+  },
+  {
+    "name": "Uga
+2026-07-28 13:28:05  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:28:05  INFO      hrms_bot  |  AGENT done  iterations=3  employee=Abhizgn	 Balabadra
+2026-07-28 13:28:18  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='this years i am asking'
+2026-07-28 13:28:18  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='this years i am asking'
+2026-07-28 13:28:20  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:28:20  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={"year": 2026}
+2026-07-28 13:28:20  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:28:20  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:28:20  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=No holidays found for 2026. Try calling again with a different year.
+2026-07-28 13:28:21  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:28:21  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={"year": 2025}
+2026-07-28 13:28:21  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:28:21  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:28:21  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=[
+  {
+    "name": "Makara Sankranti",
+    "date": "2025-01-14"
+  },
+  {
+    "name": "Republic Day",
+    "date": "2025-01-26"
+  },
+  {
+    "name": "Uga
+2026-07-28 13:28:24  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:28:24  INFO      hrms_bot  |  AGENT done  iterations=3  employee=Abhizgn	 Balabadra
+2026-07-28 13:32:58  INFO      hrms_bot  |  MongoDB connected — hrms_bot.conversations
+2026-07-28 13:33:01  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:33:01  INFO      hrms_bot  |  HRMS AI Agent starting
+2026-07-28 13:33:01  INFO      hrms_bot  |  API base : http://localhost:9091/api
+2026-07-28 13:33:01  INFO      hrms_bot  |  Log file : /Users/abhi/Documents/ai agent/hr_workflow_agent/hrms_bot.log
+2026-07-28 13:33:01  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:33:02  INFO      slack_bolt.App  |  A new session has been established (session id: 6334cd7b-b20b-4f80-977c-e1ad69945c8d)
+2026-07-28 13:33:02  INFO      slack_bolt.App  |  ⚡️ Bolt app is running!
+2026-07-28 13:33:02  INFO      slack_bolt.App  |  Starting to receive messages from a new connection (session id: 6334cd7b-b20b-4f80-977c-e1ad69945c8d)
+2026-07-28 13:33:29  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:33:30  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='can i what are the holidays we have in the upcoming months'
+2026-07-28 13:33:32  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:33:32  INFO      hrms_bot  |  AGENT done  iterations=1  employee=Abhizgn	 Balabadra
+2026-07-28 13:33:39  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='last year?'
+2026-07-28 13:33:39  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='last year?'
+2026-07-28 13:33:41  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:33:41  INFO      hrms_bot  |  TOOL call  name=get_public_holidays  args={"year": 2025}
+2026-07-28 13:33:41  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list
+2026-07-28 13:33:41  INFO      hrms_bot  |  API  GET /PublicHoliday/v2/list → 200 OK
+2026-07-28 13:33:41  INFO      hrms_bot  |  TOOL result  name=get_public_holidays  preview=[
+  {
+    "name": "Makara Sankranti",
+    "date": "2025-01-14"
+  },
+  {
+    "name": "Republic Day",
+    "date": "2025-01-26"
+  },
+  {
+    "name": "Uga
+2026-07-28 13:33:44  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:33:44  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:34:28  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='how many leaves do i have?'
+2026-07-28 13:34:29  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='how many leaves do i have?'
+2026-07-28 13:34:30  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:34:30  INFO      hrms_bot  |  TOOL call  name=get_leave_balance  args={}
+2026-07-28 13:34:30  INFO      hrms_bot  |  API  GET /Leave/leave-balance
+2026-07-28 13:34:30  INFO      hrms_bot  |  API  GET /Leave/leave-balance → 200 OK
+2026-07-28 13:34:30  INFO      hrms_bot  |  TOOL result  name=get_leave_balance  preview=[
+  {
+    "leave_id": 943,
+    "leave_type": "Privilege leave",
+    "available": 3,
+    "used": 0,
+    "total": 3
+  },
+  {
+    "leave_id": 959,
+    "l
+2026-07-28 13:34:32  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:34:32  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:50:27  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='how many leaves do i have?'
+2026-07-28 13:50:27  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='how many leaves do i have?'
+2026-07-28 13:50:28  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:50:28  INFO      hrms_bot  |  TOOL call  name=get_leave_balance  args={}
+2026-07-28 13:50:28  INFO      hrms_bot  |  API  GET /Leave/leave-balance
+2026-07-28 13:50:29  INFO      hrms_bot  |  API  GET /Leave/leave-balance → 200 OK
+2026-07-28 13:50:29  INFO      hrms_bot  |  TOOL result  name=get_leave_balance  preview=[
+  {
+    "leave_id": 943,
+    "leave_type": "Privilege leave",
+    "available": 3,
+    "used": 0,
+    "total": 3
+  },
+  {
+    "leave_id": 959,
+    "l
+2026-07-28 13:50:31  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:50:31  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:50:42  INFO      hrms_bot  |  MongoDB connected — hrms_bot.conversations
+2026-07-28 13:50:47  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:50:47  INFO      hrms_bot  |  HRMS AI Agent starting
+2026-07-28 13:50:47  INFO      hrms_bot  |  API base : http://localhost:9091/api
+2026-07-28 13:50:47  INFO      hrms_bot  |  Log file : /Users/abhi/Documents/ai agent/hr_workflow_agent/hrms_bot.log
+2026-07-28 13:50:47  INFO      hrms_bot  |  ============================================================
+2026-07-28 13:50:48  INFO      slack_bolt.App  |  A new session has been established (session id: 2bb569fb-95de-4ea9-b4ca-552c2e30837c)
+2026-07-28 13:50:48  INFO      slack_bolt.App  |  ⚡️ Bolt app is running!
+2026-07-28 13:50:48  INFO      slack_bolt.App  |  Starting to receive messages from a new connection (session id: 2bb569fb-95de-4ea9-b4ca-552c2e30837c)
+2026-07-28 13:50:55  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='how many leaves do i have?'
+2026-07-28 13:50:55  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='how many leaves do i have?'
+2026-07-28 13:50:57  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:50:57  INFO      hrms_bot  |  TOOL call  name=get_leave_balance  args={}
+2026-07-28 13:50:57  INFO      hrms_bot  |  API  GET /Leave/leave-balance
+2026-07-28 13:50:57  INFO      hrms_bot  |  API  GET /Leave/leave-balance → 200 OK
+2026-07-28 13:50:57  INFO      hrms_bot  |  TOOL result  name=get_leave_balance  preview=[
+  {
+    "leave_id": 943,
+    "leave_type": "Privilege leave",
+    "available": 3,
+    "used": 0,
+    "total": 3
+  },
+  {
+    "leave_id": 959,
+    "l
+2026-07-28 13:50:59  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:50:59  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
+2026-07-28 13:51:24  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='i want to apply for a sick leave for 1 day tomorrow'
+2026-07-28 13:51:24  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='i want to apply for a sick leave for 1 day tomorrow'
+2026-07-28 13:51:25  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:51:25  INFO      hrms_bot  |  TOOL call  name=get_leave_balance  args={}
+2026-07-28 13:51:25  INFO      hrms_bot  |  API  GET /Leave/leave-balance
+2026-07-28 13:51:26  INFO      hrms_bot  |  API  GET /Leave/leave-balance → 200 OK
+2026-07-28 13:51:26  INFO      hrms_bot  |  TOOL result  name=get_leave_balance  preview=[
+  {
+    "leave_id": 943,
+    "leave_type": "Privilege leave",
+    "available": 3,
+    "used": 0,
+    "total": 3
+  },
+  {
+    "leave_id": 959,
+    "l
+2026-07-28 13:51:27  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:51:27  INFO      hrms_bot  |  TOOL call  name=apply_leave  args={"leave_id": 959, "from_date": "2026-07-29", "to_date": "2026-07-29", "reason": "Sick leave"}
+2026-07-28 13:51:27  INFO      hrms_bot  |  API  POST /Leave/create
+2026-07-28 13:51:28  INFO      hrms_bot  |  API  POST /Leave/create → 201 OK
+2026-07-28 13:51:28  INFO      hrms_bot  |  TOOL result  name=apply_leave  preview={"success": true, "status": "Pending Approval", "from_date": "2026-07-29", "to_date": "2026-07-29"}
+2026-07-28 13:51:29  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:51:29  INFO      hrms_bot  |  AGENT done  iterations=3  employee=Abhizgn	 Balabadra
+2026-07-28 13:54:08  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='how many leaves do i have?'
+2026-07-28 13:54:09  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='how many leaves do i have?'
+2026-07-28 13:54:11  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:54:11  INFO      hrms_bot  |  AGENT done  iterations=1  employee=Abhizgn	 Balabadra
+2026-07-28 13:54:34  INFO      hrms_bot  |  MSG  user=U07119ZQKNC  text='is my leave approved?'
+2026-07-28 13:54:34  INFO      hrms_bot  |  AGENT start  employee=Abhizgn	 Balabadra  message='is my leave approved?'
+2026-07-28 13:54:35  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:54:35  INFO      hrms_bot  |  TOOL call  name=get_my_leaves  args={"status": "Inprogress"}
+2026-07-28 13:54:35  INFO      hrms_bot  |  API  GET /Leave/list
+2026-07-28 13:54:35  INFO      hrms_bot  |  API  GET /Leave/list → 200 OK
+2026-07-28 13:54:35  INFO      hrms_bot  |  TOOL result  name=get_my_leaves  preview=[
+  {
+    "leave_request_id": 68,
+    "type": "Sick Leaves",
+    "from": "2026-07-29",
+    "to": "2026-07-29",
+    "days": 1,
+    "status": "Inprogres
+2026-07-28 13:54:37  INFO      httpx  |  HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-28 13:54:37  INFO      hrms_bot  |  AGENT done  iterations=2  employee=Abhizgn	 Balabadra
