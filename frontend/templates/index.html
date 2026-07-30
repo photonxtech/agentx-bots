@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>WeNext AI PDF Copilot</title>
+
+    <link rel="stylesheet"
+          href="/static/css/style.css">
+
+</head>
+
+<body>
+
+<div class="app">
+
+    <!-- ================= Sidebar ================= -->
+
+    <aside class="sidebar">
+
+        <div class="logo">
+             WeNext AI
+        </div>
+
+        <button class="new-chat" id="newChatBtn">
+            + New Chat
+        </button>
+
+        <div class="section-label">Documents</div>
+
+        <div class="doc-list" id="docList">
+            <span class="empty-hint">No documents in this chat yet.</span>
+        </div>
+
+        <label class="upload-btn" id="uploadLabel">
+            📄🖼️ Add PDF(s) / Photo(s)
+            <input type="file" id="pdfFile" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple hidden>
+        </label>
+        <span id="uploadStatus"></span>
+
+        <div class="section-label" style="margin-top:25px;">History</div>
+
+        <div class="chat-history" id="historyList">
+        </div>
+
+    </aside>
+
+    <!-- ================= Main Area ================= -->
+
+    <main class="chat-area">
+
+        <div class="welcome">
+            <h1>AI PDF Copilot</h1>
+            <p class="subtitle">Ask questions across every PDF or photo attached to this chat — follow-ups included.</p>
+        </div>
+
+        <!-- Chat messages -->
+        <div class="chat-window" id="chatWindow"></div>
+
+        <!-- Chat input -->
+        <div class="input-area">
+            <input type="text" id="chatInput" placeholder="Ask anything about your PDF(s) or photo(s)...">
+            <button id="sendBtn">Send</button>
+        </div>
+
+    </main>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="/static/js/script.js"></script>
+
+</body>
+
+</html>

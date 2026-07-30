@@ -1,0 +1,484 @@
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+body{
+    background:#F7F5F2;
+    color:#2B2B29;
+    overflow:hidden;
+}
+
+.app{
+    display:flex;
+    height:100vh;
+}
+
+/* ================= Sidebar ================= */
+
+.sidebar{
+    width:280px;
+    min-width:280px;
+    max-width:280px;
+    background:#FAF9F6;
+    padding:20px;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border-right:1px solid #E7E4DD;
+}
+
+.logo{
+    font-size:22px;
+    font-weight:600;
+    margin-bottom:20px;
+    color:#2B2B29;
+}
+
+.new-chat{
+    width:100%;
+    padding:12px;
+    border:none;
+    border-radius:10px;
+    background:#D97757;
+    color:white;
+    cursor:pointer;
+    font-size:15px;
+    font-weight:500;
+    transition:0.2s;
+}
+
+.new-chat:hover{
+    background:#C4633F;
+}
+
+.section-label{
+    margin-top:20px;
+    margin-bottom:10px;
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.06em;
+    color:#9C9890;
+    font-weight:600;
+}
+
+/* ================= Documents ================= */
+
+.doc-list{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    max-height:140px;
+    overflow-y:auto;
+}
+
+.doc-chip{
+    background:#FFFFFF;
+    border:1px solid #E7E4DD;
+    color:#5A5650;
+    padding:8px 10px;
+    border-radius:8px;
+    font-size:13px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.doc-item{
+    position:relative;
+}
+
+.doc-item .doc-chip{
+    padding-right:26px;
+}
+
+.doc-remove-btn{
+    position:absolute;
+    top:50%;
+    right:8px;
+    transform:translateY(-50%);
+    background:none;
+    border:none;
+    cursor:pointer;
+    font-size:12px;
+    color:#B0ACA3;
+    opacity:0;
+    transition:opacity .15s;
+    line-height:1;
+}
+
+.doc-item:hover .doc-remove-btn{
+    opacity:1;
+}
+
+.doc-remove-btn:hover{
+    color:#C4633F;
+}
+
+.empty-hint{
+    color:#B0ACA3;
+    font-size:13px;
+}
+
+.upload-btn{
+    display:block;
+    margin-top:10px;
+    padding:10px 14px;
+    border-radius:10px;
+    background:#FFFFFF;
+    border:1px dashed #D6D2C8;
+    color:#5A5650;
+    text-align:center;
+    cursor:pointer;
+    font-size:14px;
+    transition:.2s;
+}
+
+.upload-btn:hover{
+    background:#F1EFE9;
+    border-color:#C9C4B7;
+}
+
+#uploadStatus{
+    display:block;
+    margin-top:8px;
+    color:#3E7A4F;
+    font-weight:600;
+    font-size:13px;
+}
+
+/* ================= History (flat, Claude-style) ================= */
+
+.chat-history{
+    flex:1;
+    overflow-y:auto;
+    overflow-x:hidden;
+    padding-right:6px;
+}
+
+.chat-history::-webkit-scrollbar{
+    width:6px;
+}
+
+.chat-history::-webkit-scrollbar-thumb{
+    background:#D6D2C8;
+    border-radius:10px;
+}
+
+.chat-history::-webkit-scrollbar-track{
+    background:transparent;
+}
+
+.history-row{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    margin-bottom:2px;
+    border-radius:8px;
+    transition:background .15s;
+}
+
+.history-row:hover{
+    background:#F1EFE9;
+}
+
+.history-item{
+    flex:1;
+    padding:10px 10px;
+    cursor:pointer;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+}
+
+.history-item.active{
+    color:#D97757;
+}
+
+.history-item strong{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    font-size:14px;
+    font-weight:500;
+    color:#2B2B29;
+}
+
+.history-item.active strong{
+    color:#D97757;
+}
+
+.history-item strong::before{
+    content:"💬";
+    font-size:12px;
+    flex-shrink:0;
+}
+
+.history-item small{
+    display:none; /* timestamps hidden, Claude-style shows only title */
+}
+
+.delete-btn{
+    background:none;
+    border:none;
+    cursor:pointer;
+    font-size:14px;
+    color:#B0ACA3;
+    padding:6px 10px 6px 0;
+    opacity:0;
+    transition:opacity .15s;
+}
+
+.history-row:hover .delete-btn{
+    opacity:1;
+}
+
+.delete-btn:hover{
+    color:#C4633F;
+}
+
+/* ================= Main ================= */
+
+.chat-area{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    background:#F7F5F2;
+}
+
+.welcome{
+    padding:25px 40px 10px 40px;
+}
+
+.welcome h1{
+    font-size:40px;
+    margin-bottom:10px;
+    font-weight:600;
+    color:#2B2B29;
+}
+
+.subtitle{
+    color:#8A8579;
+    font-size:15px;
+}
+
+/* ================= Chat window ================= */
+
+.chat-window{
+    flex:1;
+    overflow-y:auto;
+    overflow-x:hidden;
+    padding:20px 30px 30px;
+    scroll-behavior:smooth;
+}
+
+.chat-window::-webkit-scrollbar{
+    width:8px;
+}
+
+.chat-window::-webkit-scrollbar-thumb{
+    background:#D6D2C8;
+    border-radius:10px;
+}
+
+.chat-window::-webkit-scrollbar-track{
+    background:transparent;
+}
+
+/* ================= Messages (Claude-style) ================= */
+
+.msg-row{
+    display:flex;
+    margin-bottom:28px;
+}
+
+.msg-row-user{
+    justify-content:flex-end;
+}
+
+.msg-row-assistant{
+    justify-content:flex-start;
+}
+
+.user-message{
+    background:#EFEAE1;
+    color:#2B2B29;
+    padding:14px 18px;
+    border-radius:16px;
+    width:fit-content;
+    max-width:560px;
+    line-height:1.6;
+    word-break:break-word;
+}
+
+.assistant-message{
+    max-width:720px;
+    width:100%;
+    color:#2B2B29;
+    line-height:1.75;
+    font-size:15.5px;
+}
+
+.assistant-message p{
+    margin-bottom:14px;
+}
+
+.assistant-message ul,
+.assistant-message ol{
+    margin:0 0 14px 22px;
+}
+
+.assistant-message li{
+    margin-bottom:6px;
+}
+
+.assistant-message strong{
+    font-weight:600;
+    color:#1F1F1D;
+}
+
+.assistant-message code{
+    background:#EDEAE3;
+    padding:2px 6px;
+    border-radius:4px;
+    font-size:14px;
+}
+
+.assistant-message pre{
+    background:#2B2B29;
+    color:#F7F5F2;
+    padding:14px;
+    border-radius:10px;
+    overflow-x:auto;
+    margin-bottom:14px;
+}
+
+.assistant-message pre code{
+    background:none;
+    color:inherit;
+    padding:0;
+}
+
+/* ================= Typing indicator ================= */
+
+.typing-dots{
+    display:flex;
+    align-items:center;
+    gap:5px;
+    padding:8px 0;
+}
+
+.typing-dots span{
+    width:7px;
+    height:7px;
+    border-radius:50%;
+    background:#C9C4B7;
+    animation:typingBounce 1.2s infinite ease-in-out;
+}
+
+.typing-dots span:nth-child(2){
+    animation-delay:0.15s;
+}
+
+.typing-dots span:nth-child(3){
+    animation-delay:0.3s;
+}
+
+@keyframes typingBounce{
+    0%, 60%, 100%{
+        transform:translateY(0);
+        opacity:0.5;
+    }
+    30%{
+        transform:translateY(-6px);
+        opacity:1;
+    }
+}
+
+/* Sources — collapsible, subtle by default */
+
+.sources-toggle{
+    margin-top:10px;
+    font-size:13px;
+    color:#8A8579;
+}
+
+.sources-toggle summary{
+    cursor:pointer;
+    font-weight:500;
+    color:#8A8579;
+    outline:none;
+}
+
+.sources-toggle summary:hover{
+    color:#5A5650;
+}
+
+.source-line{
+    padding:6px 0 6px 4px;
+    color:#6B6760;
+    border-bottom:1px solid #EDEAE3;
+}
+
+.source-line:last-child{
+    border-bottom:none;
+}
+
+.token-caption{
+    margin-top:8px;
+    font-size:12px;
+    color:#B0ACA3;
+}
+
+/* ================= Input ================= */
+
+.input-area{
+    display:flex;
+    gap:12px;
+    padding:20px 25px 25px;
+    background:#F7F5F2;
+}
+
+.input-area input{
+    flex:1;
+    padding:16px 18px;
+    border:1px solid #E7E4DD;
+    border-radius:14px;
+    font-size:16px;
+    outline:none;
+    background:#FFFFFF;
+    color:#2B2B29;
+}
+
+.input-area input:focus{
+    box-shadow:0 0 0 2px #D9775733;
+    border-color:#D97757;
+}
+
+.input-area input::placeholder{
+    color:#B0ACA3;
+}
+
+.input-area button{
+    padding:16px 30px;
+    border:none;
+    border-radius:14px;
+    background:#D97757;
+    color:white;
+    cursor:pointer;
+    transition:.2s;
+    font-size:15px;
+    font-weight:600;
+}
+
+.input-area button:hover{
+    background:#C4633F;
+    transform:translateY(-1px);
+}
