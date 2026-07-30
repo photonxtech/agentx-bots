@@ -1,0 +1,17 @@
+# Environment
+.env
+ragenv/
+
+# Python
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+uvicorn.log
