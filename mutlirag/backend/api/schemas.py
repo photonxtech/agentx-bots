@@ -96,6 +96,25 @@ class AskResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Q&A + metrics log (Postgres, see db.py)
+# --------------------------------------------------------------------------- #
+class QaLogEntry(BaseModel):
+    """One logged, answered turn with its 6 RAGAS-style metrics."""
+    id: int
+    chat_id: str
+    question: str
+    answer: str
+    sources: list[dict] = Field(default_factory=list)
+    faithfulness: float | None = None
+    answer_relevancy: float | None = None
+    context_precision: float | None = None
+    context_relevancy: float | None = None
+    context_recall: float | None = None
+    answer_correctness: float | None = None
+    created_at: str
+
+
+# --------------------------------------------------------------------------- #
 # Misc
 # --------------------------------------------------------------------------- #
 class HealthResponse(BaseModel):

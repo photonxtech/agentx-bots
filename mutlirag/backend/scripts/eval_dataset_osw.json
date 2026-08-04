@@ -1,0 +1,102 @@
+[
+  {
+    "question": "Who is the author of the 5 Essential Smart Skills program, and what organization is it associated with?",
+    "ground_truth": "The program is written by Bob Wiele, founder of OneSmartWorld.",
+    "source_page": 77
+  },
+  {
+    "question": "What are the 5 Smart Skills in the program?",
+    "ground_truth": "1. Thinking and Problem Solving, 2. Igniting Personal Spirit, 3. Speaking, Presenting and Communicating, 4. Writing to Record, Report and Persuade, 5. Working Collaboratively with Others.",
+    "source_page": 77
+  },
+  {
+    "question": "What is a 'thinking style' according to the book, and whose research does it draw on?",
+    "ground_truth": "A thinking style is not a skill or ability, but the way you prefer to use the abilities you already have — it's about where you put your focus and attention. The book draws on the research of Robert Sternberg, noting that thinking styles are preferences, not abilities.",
+    "source_page": 12
+  },
+  {
+    "question": "What are the three typical problem-solving mistakes described in the book?",
+    "ground_truth": "1. Lack of a process, 2. Overconfidence in our own judgement, 3. Mistaking talking for progress.",
+    "source_page": 47
+  },
+  {
+    "question": "What is the recommended fix for the 'Lack of a Process' problem-solving mistake?",
+    "ground_truth": "Pick a process for every important problem you face — select a Smart Track process to think through what you have to do, and use it as your path and GPS to get where you want to go.",
+    "source_page": 47
+  },
+  {
+    "question": "What is the tip for avoiding 'Overconfidence in our own judgement'?",
+    "ground_truth": "Slow down, see every problem as fresh and unique instead of lumping it in with past problems, get into a Yellow mindset to learn as much as possible before taking further steps, tune in, listen, scan the situation, and ask lots of clarifying questions.",
+    "source_page": 47
+  },
+  {
+    "question": "What are the three steps in 'Smart Track #4: Ideas to Decisions'?",
+    "ground_truth": "Step 1: Generate ideas (What could we do?). Step 2: Organize ideas into clusters (How can we organize these ideas?). Step 3: Make a decision (What should we do?).",
+    "source_page": 62
+  },
+  {
+    "question": "What does the book say about the growth mindset, and whose quote supports it?",
+    "ground_truth": "In a growth mindset, you recognize that everything is learning and any new skill takes time to develop — instant success is a delusion and a distraction; the real work is putting in effort to get better. The book quotes Carol Dweck: 'With practice, training and above all, method, we manage to increase our attention, our memory, our judgment and literally to become more intelligent than we were before.'",
+    "source_page": 336
+  },
+  {
+    "question": "What is the 5:1 ratio mentioned in the 'Working Collaboratively with Others' section?",
+    "ground_truth": "The 5:1 ratio refers to using 5 positives for every 1 negative in conversations at work.",
+    "source_page": 169
+  },
+  {
+    "question": "What book and authors does the conflict-resolution section reference for negotiation?",
+    "ground_truth": "It references 'Getting to Yes' by Roger Fisher, William Ury, and Bruce Patton, Harvard University experts in conflict and negotiation.",
+    "source_page": 230
+  },
+  {
+    "question": "What are the five key points from the 'Getting to Yes' negotiation experts, according to the book?",
+    "ground_truth": "1. Separate the person/people from the problem. 2. Focus on the interests of each person/group, not positions. 3. Invent options for mutual gain vs. win-lose options. 4. Invest in setting and using objective criteria vs. personalized ones. 5. Know your BATNA (Best Alternative Negotiated Agreement) and be ready to reframe back-up positions.",
+    "source_page": 230
+  },
+  {
+    "question": "What do WIN-WIN, WIN-LOSE, and LOSE-LOSE mean in the context of conflict, per the book?",
+    "ground_truth": "WIN-WIN is when both sides give and take and achieve benefits. WIN-LOSE is when one side wins at the expense of the other side. LOSE-LOSE is when the way the conflict is handled ends with both sides losing.",
+    "source_page": 230
+  },
+  {
+    "question": "Which mindset colour is described as being at the heart of conflict?",
+    "ground_truth": "Red is described as the mindset colour at the heart of conflict — where decisions about what's right, fair, or wanted are made, and where conflict is ultimately resolved.",
+    "source_page": 231
+  },
+  {
+    "question": "What is Lesson 3 in the 'Speaking, Presenting and Communicating' section about?",
+    "ground_truth": "Lesson 3, 'How to Ask and Use Smart Questions,' describes questions as precision power tools for the mind that help open, measure, map, make, close, fix, and connect things, and shape how other people respond to you.",
+    "source_page": 123
+  },
+  {
+    "question": "What is the focus of Lesson 1 in 'Writing to Record, Report and Persuade'?",
+    "ground_truth": "Lesson 1, 'Writing as an Essential Skill,' explains that writing is an essential 21st-century workplace skill, needed for simple texts, short reports, briefing notes, incident reports, emails, and descriptive notes on what was said or what happened.",
+    "source_page": 260
+  },
+  {
+    "question": "What is 'Get Into The Flow' as one of the 18 Success Strategies?",
+    "ground_truth": "Being fully immersed in creative thinking, tolerating ambiguity and conflicting information and feelings, staying patient, refraining from decision-making, and anticipating the arrival of a better idea. It is one of two strategies for achieving creative insights from intuition, combining tolerance for ambiguity with a flow state of mind.",
+    "source_page": 486
+  },
+  {
+    "question": "What is 'Trust Your Heart' as one of the 18 Success Strategies?",
+    "ground_truth": "Listening to your heart and feelings as a guide for making decisions about what to do. It is the second of two emotion-based decision-making strategies, focusing attention on what your inner voice/intuition is telling you.",
+    "source_page": 501
+  },
+  {
+    "question": "What does 'Understanding' mean within the Four Dimensions of High Performance?",
+    "ground_truth": "Understanding is deeper than knowledge — it goes beyond describing reality and encompasses both cognitive and emotional ways of knowing. It gives a solid grasp of the facts, forces, and feelings at play in everyday life, achieved by staying open and aware and gathering information using all your senses while refraining completely from judging.",
+    "source_page": 471
+  },
+  {
+    "question": "According to 'Smart For Life,' what do smart people know how to do?",
+    "ground_truth": "Smart people know how to collect their thoughts under pressure, find and organize the information they need, pinpoint the real crux of any problem, turn problems into opportunities, generate many creative options and alternatives, resist the impulse to act on their first thought, ask questions that stimulate openness and inquiry, and maintain a cool head under pressure.",
+    "source_page": 456
+  },
+  {
+    "question": "What is the CEO's total revenue for Q3 2025 mentioned in this document?",
+    "ground_truth": "This document does not contain any financial or revenue data — it is a self-help/skills-training book about thinking, communication, and collaboration, not a financial report. The correct answer is that this information is not present in the document.",
+    "source_page": null
+  }
+]

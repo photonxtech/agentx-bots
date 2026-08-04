@@ -1,0 +1,282 @@
+[
+  {
+    "question": "Who is the author of the 5 Essential Smart Skills program, and what organization is it associated with?",
+    "ground_truth": "The program is written by Bob Wiele, founder of OneSmartWorld.",
+    "source_page": 77,
+    "answer": "The context does not mention the \"5 Essential Smart Skills program\". However, it does mention the \"SmartSkills®: 21st Century Skills for Success program\" and the \"Success @ Work\" program. The SmartSkills program is based on a project developed and licensed by OneSmartWorld Inc., and it is associated with Workplace Education Manitoba. The authors mentioned are Richard Wedemeyer, Ronald Jue, Jason Womack, Kara Wright, Orville Wright, and Wilbur Wright, but it is not clear if they are the authors of the program or just individuals mentioned in the context.",
+    "metrics": {
+      "faithfulness": 0.909,
+      "answer_relevancy": 0.68,
+      "context_precision": 0.53,
+      "context_relevancy": 0.091,
+      "context_recall": 0.5,
+      "answer_correctness": 0.16
+    }
+  },
+  {
+    "question": "What are the 5 Smart Skills in the program?",
+    "ground_truth": "1. Thinking and Problem Solving, 2. Igniting Personal Spirit, 3. Speaking, Presenting and Communicating, 4. Writing to Record, Report and Persuade, 5. Working Collaboratively with Others.",
+    "source_page": 77,
+    "answer": "The 5 Smart Skills in the program are:\n1. Thinking and Problem Solving\n2. Igniting Personal Spirit\n3. Speaking, Presenting and Communicating\n4. Writing to Record, Report and Persuade\n5. Working Collaboratively with Others",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.872,
+      "context_precision": 1.0,
+      "context_relevancy": 0.12,
+      "context_recall": 1.0,
+      "answer_correctness": 0.948
+    }
+  },
+  {
+    "question": "What is a 'thinking style' according to the book, and whose research does it draw on?",
+    "ground_truth": "A thinking style is not a skill or ability, but the way you prefer to use the abilities you already have — it's about where you put your focus and attention. The book draws on the research of Robert Sternberg, noting that thinking styles are preferences, not abilities.",
+    "source_page": 12,
+    "answer": "A thinking style is a way of thinking, not a skill or ability. It is the way you like to use the abilities you have, and it is the way you see the world. This concept draws on the lifelong research work of Robert Sternberg.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.813,
+      "context_precision": 0.85,
+      "context_relevancy": 0.035,
+      "context_recall": 1.0,
+      "answer_correctness": 0.728
+    }
+  },
+  {
+    "question": "What are the three typical problem-solving mistakes described in the book?",
+    "ground_truth": "1. Lack of a process, 2. Overconfidence in our own judgement, 3. Mistaking talking for progress.",
+    "source_page": 47,
+    "answer": "The three typical problem-solving mistakes are mentioned, but only one is described in the provided context: LACK OF A PROCESS. This is where you leave things to chance, make decisions much too quickly or slowly, and never use a simple step-by-step process to get you where you want to go. Without a process, you might not gather the essential facts and information that would help you to solve the problem. You fail to explore enough options, and you can jump to conclusions too quickly. The other two mistakes are not described in the given context.",
+    "metrics": {
+      "faithfulness": 0.714,
+      "answer_relevancy": 0.637,
+      "context_precision": 0.811,
+      "context_relevancy": 0.111,
+      "context_recall": 0.667,
+      "answer_correctness": 0.554
+    }
+  },
+  {
+    "question": "What is the recommended fix for the 'Lack of a Process' problem-solving mistake?",
+    "ground_truth": "Pick a process for every important problem you face — select a Smart Track process to think through what you have to do, and use it as your path and GPS to get where you want to go.",
+    "source_page": 47,
+    "answer": "The recommended fix for the 'Lack of a Process' problem-solving mistake is to pick a process for every important problem you face. You should select a Smart Track process that will help you think through what you have to do and use it as your path and GPS to get to where you want to go. Before doing anything, make sure to have a simple step-by-step process in place to gather essential facts and information, explore enough options, and avoid jumping to conclusions too quickly.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.814,
+      "context_precision": 0.967,
+      "context_relevancy": 0.042,
+      "context_recall": null,
+      "answer_correctness": 0.815
+    }
+  },
+  {
+    "question": "What is the tip for avoiding 'Overconfidence in our own judgement'?",
+    "ground_truth": "Slow down, see every problem as fresh and unique instead of lumping it in with past problems, get into a Yellow mindset to learn as much as possible before taking further steps, tune in, listen, scan the situation, and ask lots of clarifying questions.",
+    "source_page": 47,
+    "answer": "The tip for avoiding 'Overconfidence in our own judgement' is to slow down and see every problem as fresh and unique, and don’t simply lump it in with other problems you have dealt with in the past.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.79,
+      "context_precision": 0.35,
+      "context_relevancy": 0.026,
+      "context_recall": 0.875,
+      "answer_correctness": 0.952
+    }
+  },
+  {
+    "question": "What are the three steps in 'Smart Track #4: Ideas to Decisions'?",
+    "ground_truth": "Step 1: Generate ideas (What could we do?). Step 2: Organize ideas into clusters (How can we organize these ideas?). Step 3: Make a decision (What should we do?).",
+    "source_page": 62,
+    "answer": "The three steps in 'Smart Track #4: Ideas to Decisions' are: \n1. Green – Generate Ideas: What ideas can I/we generate? What new possibilities can be created?\n2. Yellow – Organize Ideas into Categories: How should these ideas be organized?\n3. Make Decision (color not specified): The context provided does not explicitly state the third step for 'Smart Track #4: Ideas to Decisions', but based on the pattern of other Smart Tracks, it is likely that the third step involves making a decision.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.956,
+      "context_precision": 0.6,
+      "context_relevancy": 0.039,
+      "context_recall": 0.5,
+      "answer_correctness": 0.844
+    }
+  },
+  {
+    "question": "What does the book say about the growth mindset, and whose quote supports it?",
+    "ground_truth": "In a growth mindset, you recognize that everything is learning and any new skill takes time to develop — instant success is a delusion and a distraction; the real work is putting in effort to get better. The book quotes Carol Dweck: 'With practice, training and above all, method, we manage to increase our attention, our memory, our judgment and literally to become more intelligent than we were before.'",
+    "source_page": 336,
+    "answer": "The book says that the growth mindset is a shift in your approach to learning, to work opportunities, and to life. It's about recognizing that everything is learning and any new skill takes time to develop. Instant success is a delusion and a distraction. The real work is buckling down and putting in effort to get better. The growth mindset is all about not worrying about looking stupid and just getting in there to learn and stretch yourself to get smarter, one small step at a time. \n\nThis concept is supported by a quote from Carol Dweck, which states: \"With practice, training and above all, method, we manage to increase our attention, our memory, our judgment and literally to become more intelligent than we were before.\"",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.725,
+      "context_precision": 0.696,
+      "context_relevancy": 0.117,
+      "context_recall": 0.9,
+      "answer_correctness": 0.982
+    }
+  },
+  {
+    "question": "What is the 5:1 ratio mentioned in the 'Working Collaboratively with Others' section?",
+    "ground_truth": "The 5:1 ratio refers to using 5 positives for every 1 negative in conversations at work.",
+    "source_page": 169,
+    "answer": "The 5:1 ratio refers to having 5 positive comments or responses for every 1 negative one. This means that for every negative comment, there should be five positive comments to balance it out and set a constructive tone for working well with others.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.694,
+      "context_precision": 0.53,
+      "context_relevancy": 0.477,
+      "context_recall": 1.0,
+      "answer_correctness": 0.969
+    }
+  },
+  {
+    "question": "What book and authors does the conflict-resolution section reference for negotiation?",
+    "ground_truth": "It references 'Getting to Yes' by Roger Fisher, William Ury, and Bruce Patton, Harvard University experts in conflict and negotiation.",
+    "source_page": 230,
+    "answer": "The conflict-resolution section does not explicitly reference a specific book and author for negotiation. However, it mentions \"Thinking and Problem Solving Book (The 5)\" in the context of thinking styles and problem-solving, but this is not directly related to conflict resolution or negotiation.",
+    "metrics": {
+      "faithfulness": 0.8,
+      "answer_relevancy": 0.881,
+      "context_precision": 0.282,
+      "context_relevancy": 0.098,
+      "context_recall": 0.75,
+      "answer_correctness": 0.144
+    }
+  },
+  {
+    "question": "What are the five key points from the 'Getting to Yes' negotiation experts, according to the book?",
+    "ground_truth": "1. Separate the person/people from the problem. 2. Focus on the interests of each person/group, not positions. 3. Invent options for mutual gain vs. win-lose options. 4. Invest in setting and using objective criteria vs. personalized ones. 5. Know your BATNA (Best Alternative Negotiated Agreement) and be ready to reframe back-up positions.",
+    "source_page": 230,
+    "answer": "The five key points from the 'Getting to Yes' negotiation experts are:\n1. Separate the person/people from the problem. Focus on the issues that need to be dealt with, and not on the personalities. Stay in Yellow to understand, and then work on defining the crux in Red.\n2. Focus on the interests of each person/group, and don’t take positions. Avoid coming in with non-negotiable cool or warm Reds, such as a ‘my way or the highway’ position.\n3. Invent options for mutual gain vs. win-lose options. Take the time needed to go Green. Challenge assumptions, reframe problems into possibilities and think about possible solutions.\n4. Invest in setting and using objective criteria vs. personalized ones. Use the cool Red criteria such as time.\n(Note: The fifth point is not explicitly mentioned in the provided context.)",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.74,
+      "context_precision": 0.383,
+      "context_relevancy": 0.043,
+      "context_recall": 0.8,
+      "answer_correctness": 0.755
+    }
+  },
+  {
+    "question": "What do WIN-WIN, WIN-LOSE, and LOSE-LOSE mean in the context of conflict, per the book?",
+    "ground_truth": "WIN-WIN is when both sides give and take and achieve benefits. WIN-LOSE is when one side wins at the expense of the other side. LOSE-LOSE is when the way the conflict is handled ends with both sides losing.",
+    "source_page": 230,
+    "answer": "In the context of conflict, WIN-WIN means when both sides give and take and achieve benefits. WIN-LOSE means when one side wins at the expense of the other side. LOSE-LOSE means when the way the conflict is handled ends with both sides losing.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.68,
+      "context_precision": 0.387,
+      "context_relevancy": 0.077,
+      "context_recall": 1.0,
+      "answer_correctness": 0.994
+    }
+  },
+  {
+    "question": "Which mindset colour is described as being at the heart of conflict?",
+    "ground_truth": "Red is described as the mindset colour at the heart of conflict — where decisions about what's right, fair, or wanted are made, and where conflict is ultimately resolved.",
+    "source_page": 231,
+    "answer": "The Red mindset is described as being at the heart of conflict.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.726,
+      "context_precision": 1.0,
+      "context_relevancy": 0.076,
+      "context_recall": 1.0,
+      "answer_correctness": 0.826
+    }
+  },
+  {
+    "question": "What is Lesson 3 in the 'Speaking, Presenting and Communicating' section about?",
+    "ground_truth": "Lesson 3, 'How to Ask and Use Smart Questions,' describes questions as precision power tools for the mind that help open, measure, map, make, close, fix, and connect things, and shape how other people respond to you.",
+    "source_page": 123,
+    "answer": "There is no information provided about Lesson 3 in the 'Speaking, Presenting and Communicating' section. The context only mentions Lesson 1: Smart Communications.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.827,
+      "context_precision": null,
+      "context_relevancy": null,
+      "context_recall": 0.222,
+      "answer_correctness": 0.914
+    }
+  },
+  {
+    "question": "What is the focus of Lesson 1 in 'Writing to Record, Report and Persuade'?",
+    "ground_truth": "Lesson 1, 'Writing as an Essential Skill,' explains that writing is an essential 21st-century workplace skill, needed for simple texts, short reports, briefing notes, incident reports, emails, and descriptive notes on what was said or what happened.",
+    "source_page": 260,
+    "answer": "The context does not mention Lesson 1. It mentions Lesson 3, which focuses on three different writing purposes: to inform, to report, and to persuade, with an emphasis on writing to record, request, and persuade.",
+    "metrics": {
+      "faithfulness": 0.667,
+      "answer_relevancy": 0.741,
+      "context_precision": 0.383,
+      "context_relevancy": 0.385,
+      "context_recall": 1.0,
+      "answer_correctness": 0.177
+    }
+  },
+  {
+    "question": "What is 'Get Into The Flow' as one of the 18 Success Strategies?",
+    "ground_truth": "Being fully immersed in creative thinking, tolerating ambiguity and conflicting information and feelings, staying patient, refraining from decision-making, and anticipating the arrival of a better idea. It is one of two strategies for achieving creative insights from intuition, combining tolerance for ambiguity with a flow state of mind.",
+    "source_page": 486,
+    "answer": "'Get Into The Flow' is one of the 18 Success Strategies that involves being fully immersed in creative thinking, tolerating ambiguity and conflicting information and feelings, staying patient, refraining from decision-making, and anticipating the arrival of a better idea. It combines two complementary elements of the creative intuitive mindset – a tolerance for ambiguity and the flow state of mind. This strategy sets you up for getting the insights that come from being in the high performance zone and is a precondition for the Eureka moment. It is one of the two strategies for achieving creative insights from your intuition.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.59,
+      "context_precision": 1.0,
+      "context_relevancy": 0.089,
+      "context_recall": 1.0,
+      "answer_correctness": 0.763
+    }
+  },
+  {
+    "question": "What is 'Trust Your Heart' as one of the 18 Success Strategies?",
+    "ground_truth": "Listening to your heart and feelings as a guide for making decisions about what to do. It is the second of two emotion-based decision-making strategies, focusing attention on what your inner voice/intuition is telling you.",
+    "source_page": 501,
+    "answer": "'Trust Your Heart' is one of the 18 Success Strategies, specifically the second of the two emotion-based decision-making strategies. It involves listening to your heart and feelings as a guide for making decisions about what to do. This strategy focuses your attention on what your heart tells you is the right thing to do and is often very spontaneous in providing direction and decisions. It is based on intuition, which is a powerful source of information for making good decisions, and gives you a gut feeling on what to do. This strategy is essential to use in fast-moving situations and is particularly useful when faced with difficult dilemmas and tough choices, requiring an openness and ability to listen to your own inner wisdom.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.66,
+      "context_precision": 0.85,
+      "context_relevancy": null,
+      "context_recall": 1.0,
+      "answer_correctness": 0.792
+    }
+  },
+  {
+    "question": "What does 'Understanding' mean within the Four Dimensions of High Performance?",
+    "ground_truth": "Understanding is deeper than knowledge — it goes beyond describing reality and encompasses both cognitive and emotional ways of knowing. It gives a solid grasp of the facts, forces, and feelings at play in everyday life, achieved by staying open and aware and gathering information using all your senses while refraining completely from judging.",
+    "source_page": 471,
+    "answer": "Within the Four Dimensions of High Performance, 'Understanding' refers to a dimension that goes beyond mere knowledge, encompassing both cognitive and emotional ways of knowing. It involves staying open and aware, gathering information using all senses and sensibilities, and refraining from judging. The intention is to gain a solid grasp of the facts, forces, and feelings at play in everyday life, allowing one to map out the dynamics and factors in a situation. It is one of the four key dimensions, along with creativity, decision-making, and personal spirit, that make up a person's operating style.",
+    "metrics": {
+      "faithfulness": 0.833,
+      "answer_relevancy": 0.709,
+      "context_precision": 1.0,
+      "context_relevancy": 0.322,
+      "context_recall": 1.0,
+      "answer_correctness": 0.868
+    }
+  },
+  {
+    "question": "According to 'Smart For Life,' what do smart people know how to do?",
+    "ground_truth": "Smart people know how to collect their thoughts under pressure, find and organize the information they need, pinpoint the real crux of any problem, turn problems into opportunities, generate many creative options and alternatives, resist the impulse to act on their first thought, ask questions that stimulate openness and inquiry, and maintain a cool head under pressure.",
+    "source_page": 456,
+    "answer": "According to 'Smart For Life,' smart people know how to: \n• collect their thoughts under pressure\n• find and organize the information they need\n• pinpoint the real crux of any problem\n• turn problems into opportunities\n• generate many creative options and alternatives\n• resist the impulse to act on their first thought\n• ask questions that stimulate openness and inquiry\n• maintain a cool head under pressure\n• continue to stay open throughout a problem-solving process\n• build relationships with compassion and a warm heart\n• trust their intuition\n• take initiative\n• make decisions wisely.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.741,
+      "context_precision": 1.0,
+      "context_relevancy": 0.443,
+      "context_recall": 1.0,
+      "answer_correctness": 0.829
+    }
+  },
+  {
+    "question": "What is the CEO's total revenue for Q3 2025 mentioned in this document?",
+    "ground_truth": "This document does not contain any financial or revenue data — it is a self-help/skills-training book about thinking, communication, and collaboration, not a financial report. The correct answer is that this information is not present in the document.",
+    "source_page": null,
+    "answer": "I don't know. Please ask a question related to the uploaded documents.",
+    "metrics": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.511,
+      "context_precision": 0.0,
+      "context_relevancy": 0.0,
+      "context_recall": 0.667,
+      "answer_correctness": 0.914
+    }
+  }
+]

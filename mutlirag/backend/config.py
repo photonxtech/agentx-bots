@@ -35,11 +35,23 @@ TOP_K = 10  # base chunks per query; auto-scales up with more indexed documents
 # ("ZEBRA-42", invoice numbers). 0.65 favors meaning but keeps exact matches.
 HYBRID_ALPHA = 0.65
 
+# --- Reranking (second-stage, cross-encoder) ---
+# Hybrid search above blends two INDEPENDENT signals (embedding cosine + BM25)
+# with a fixed weight — it can't reason about the query and a chunk together.
+# A cross-encoder scores each (query, chunk) pair jointly, which is far more
+# accurate at ranking but too slow to run over the whole index, so it only
+# re-scores the small candidate pool hybrid search already retrieved.
+RERANK_ENABLED = True
+# cross-encoder/ms-marco-MiniLM-L-6-v2: 22M params, fast enough for per-request
+# reranking of ~30 chunks. Swap for "BAAI/bge-reranker-base" (278M params, pairs
+# naturally with the bge embedding model above) for higher quality at more latency.
+RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
 # --- Vector DB backend ---
 # "weaviate" -> self-hosted Weaviate (see docker-compose.yml); "chroma" -> the
 # original embedded ChromaDB. If Weaviate is selected but unreachable at
 # startup, the app automatically falls back to Chroma so nothing breaks.
-VECTOR_BACKEND = "chroma"
+VECTOR_BACKEND = "weaviate"
 
 # --- Weaviate connection (only used when VECTOR_BACKEND == "weaviate") ---
 # Matches the ports published in docker-compose.yml. We supply our own vectors
@@ -105,16 +117,49 @@ VISION_MAX_RETRIES = 4       # retries on a transient (per-minute) rate limit
 VISION_MAX_RETRY_WAIT = 25.0  # s; if the API says wait longer (per-day limit), give up instead
 
 # --- RAGAS-style answer evaluation (reference-free, computed live per answer) ---
-# After each grounded answer we score it on three RAGAS metrics — WITHOUT any
+# After each grounded answer we score it on four RAGAS metrics — WITHOUT any
 # ground-truth labels — using a small, fast judge model:
 #   * faithfulness      — is every claim in the answer grounded in the context?
 #   * answer_relevancy  — does the answer actually address the question?
 #   * context_precision — are the *useful* retrieved chunks ranked near the top?
+#   * context_relevancy — of all retrieved text, what fraction is actually relevant
+#                        (signal-to-noise), regardless of chunk ranking?
 # Each metric is an extra Groq call (faithfulness is two), so this adds latency.
 # Set RAGAS_ENABLED = False to turn evaluation off entirely (no extra API calls).
 RAGAS_ENABLED = True
 RAGAS_EVAL_MODEL = "llama-3.1-8b-instant"   # cheap/fast model used only for judging
 RAGAS_RELEVANCY_N = 3   # how many questions to generate from the answer for relevancy
+RAGAS_TIMEOUT_S = 15.0  # per-call timeout on the judge model; a hang must not stall a request
+# Rate-limit handling: judge calls run several-at-once (see evaluate()) and each
+# carries the full retrieved context, so a burst can trip the judge model's TPM
+# limit. Retry transient 429s using the API's own suggested wait; give up if it
+# asks for longer than this (a real per-day quota exhaustion, not a blip).
+RAGAS_MAX_RETRIES = 4
+RAGAS_MAX_RETRY_WAIT = 65.0  # s; covers a full per-minute (TPM) reset window
+# Ceiling for the token-budget-doubling retry (see _judge_json): a long answer
+# can need more than the default max_tokens to finish its JSON reply without
+# getting cut off mid-object.
+RAGAS_MAX_TOKENS_CAP = 2000
+
+# --- Golden-set lookup (live chat) ---
+# context_recall/answer_correctness need a ground-truth answer, which a real
+# user's question never has. If a live question closely matches one of the
+# curated questions in GOLDEN_SET_PATH (cosine similarity via the same local
+# embedding model), RagService.evaluate_answer() reuses that row's
+# ground_truth to score those two metrics too. Anything below the threshold
+# still gets only the four reference-free metrics.
+GOLDEN_SET_PATH = os.path.join(BASE_DIR, "backend", "scripts", "eval_dataset_osw.json")
+GOLDEN_SET_MATCH_THRESHOLD = 0.92
+
+# --- Postgres (Q&A + RAGAS metrics logging) ---
+# Every chat turn's question/answer/sources + the 6 RAGAS-style metrics
+# (faithfulness, answer_relevancy, context_precision, context_relevancy,
+# context_recall, answer_correctness) are logged here — see db.py. This runs
+# ALONGSIDE the existing JSON chat_store.py, not instead of it: chat_store.py
+# stays the source of truth for chat/message state; Postgres is purely an
+# additive log for history/analytics. If DATABASE_URL is unset or Postgres is
+# unreachable, logging is skipped (with a warning) — it never blocks a chat answer.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # --- OCR ---
 OCR_LANGUAGES = ["en"]   # add e.g. "fr", "de" — see EasyOCR supported languages

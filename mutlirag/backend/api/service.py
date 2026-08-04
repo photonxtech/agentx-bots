@@ -27,7 +27,7 @@ import time
 
 import config
 import chat_store
-from rag import chunking, evaluation, generator, ingestion
+from rag import chunking, evaluation, generator, golden_set, ingestion, reranker
 from rag.ingestion import Document
 from rag.vectorstore import VectorStore
 
@@ -365,10 +365,15 @@ class RagService:
             )
         search_ms = int((time.perf_counter() - t1) * 1000)
 
-        # 3. Bias by source type or filename keywords (same heuristics as the UI).
+        # 3. Rerank the candidate pool with a cross-encoder (query+chunk scored
+        #    jointly), which ranks far better than hybrid search's fixed blend.
+        if config.RERANK_ENABLED:
+            hits = reranker.rerank(search_q, hits)
+
+        # 4. Bias by source type or filename keywords (same heuristics as the UI).
         hits = self._filter_hits(question, search_q, hits, chat_id, effective_top_k)
 
-        # 4. Confidence = top blended score (0..1) -> percentage.
+        # 5. Confidence = top score (0..1) -> percentage.
         top_score = hits[0][1] if hits else 0.0
         confidence_pct = int(round(min(top_score, 1.0) * 100))
 
@@ -465,10 +470,12 @@ class RagService:
         )
 
     # --------------------------------------------------------------------- #
-    # Evaluation (reference-free RAGAS metrics, computed after the answer)
+    # Evaluation (RAGAS metrics, computed after the answer)
     # --------------------------------------------------------------------- #
     def evaluate_answer(self, question: str, answer: str, hits) -> dict | None:
-        """Score a produced answer on faithfulness / relevancy / context precision.
+        """Score a produced answer on the four reference-free RAGAS metrics,
+        plus context_recall/answer_correctness when `question` closely matches
+        one of the curated golden_set questions (see rag.golden_set).
 
         Uses the FULL text of the retrieved chunks (not the truncated snippets in
         `sources`). Returns None when evaluation is disabled, there is nothing to
@@ -482,6 +489,9 @@ class RagService:
         if not contexts:
             return None
         try:
+            ground_truth = golden_set.lookup(question)
+            if ground_truth:
+                return evaluation.evaluate_with_ground_truth(question, answer, ground_truth, contexts)
             return evaluation.evaluate(question, answer, contexts)
         except Exception:
             return None

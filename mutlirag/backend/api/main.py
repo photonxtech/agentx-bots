@@ -30,7 +30,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+# Load secrets from <project root>/.env BEFORE importing config (or anything
+# that imports config) — config.py reads some env vars (e.g. DATABASE_URL) at
+# *import* time, so .env must already be loaded into the process environment
+# before that import runs, or those values freeze to None for the whole run.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
+
 import config
+import db
 from rag import generator
 from api import schemas
 from api.service import ChatNotFoundError, NoDocumentError, RagService, smalltalk_reply
@@ -38,10 +46,6 @@ from api.service import ChatNotFoundError, NoDocumentError, RagService, smalltal
 # The frontend lives OUTSIDE the backend, at <project root>/frontend. config.BASE_DIR
 # is the project root (parent of backend/), so this resolves regardless of cwd.
 FRONTEND_DIR = os.path.join(config.BASE_DIR, "frontend")
-
-# Load secrets from <project root>/.env explicitly, so it works no matter which
-# directory the server was launched from.
-load_dotenv(os.path.join(config.BASE_DIR, ".env"))
 
 # Populated in the lifespan handler and reused by every request.
 service: RagService | None = None
@@ -51,16 +55,21 @@ service: RagService | None = None
 async def lifespan(app: FastAPI):
     """Load the vector store + chats once, before any request is served."""
     global service
-    service = RagService()  # hydrates Chroma + chat history from disk
+    service = RagService()  # hydrates VectorStore (Weaviate / Chroma) + chat history
+    db.init()  # Postgres Q&A/metrics log — no-op if DATABASE_URL is unset
     yield
-    # Nothing to tear down for the embedded Chroma backend. (If you switch to
-    # Weaviate, close the client here: service.store.client.close().)
+    if service and hasattr(service.store, "client") and hasattr(service.store.client, "close"):
+        try:
+            service.store.client.close()
+        except Exception:
+            pass
+    db.close()
 
 
 app = FastAPI(
     title="Multi-RAG API",
     description="REST backend for the multi-modal, per-chat RAG pipeline "
-                "(ChromaDB + local embeddings + BM25 + Groq).",
+                "(Weaviate + local embeddings + BM25 + Groq).",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -269,12 +278,13 @@ def ask(chat_id: str, body: schemas.AskRequest):
         "confidence_pct": r["confidence_pct"],
     }
 
-    # Reference-free RAGAS scores (faithfulness / relevancy / context precision).
+    # Reference-free RAGAS scores (faithfulness / relevancy / context precision / context relevancy).
     ragas = s.evaluate_answer(body.question, answer_text, r["hits"])
     if ragas:
         metrics.update(ragas)
 
     s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
+    db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics)
 
     return {
         "chat_id": chat_id,
@@ -369,6 +379,7 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
             metrics.update(ragas)
         # Persist the assistant turn only after the full answer is produced.
         s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
+        db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics)
         yield sse({"type": "done", "metrics": metrics, "sources": r["sources"]})
 
     return StreamingResponse(
@@ -376,6 +387,30 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Q&A + metrics log (Postgres, see db.py) — read-back for history/analytics.
+# --------------------------------------------------------------------------- #
+@app.get("/qa-logs", response_model=list[schemas.QaLogEntry], tags=["qa-logs"])
+def qa_logs(chat_id: str | None = None, limit: int = 100):
+    """Recent logged Q&A turns + their 6 RAGAS-style metrics, newest first.
+
+    Empty list (not an error) if Postgres logging isn't configured/reachable.
+    """
+    rows = db.fetch_qa_logs(chat_id=chat_id, limit=limit)
+    for row in rows:
+        row["created_at"] = row["created_at"].isoformat()
+    return rows
+
+
+@app.get("/chats/{chat_id}/qa-logs", response_model=list[schemas.QaLogEntry], tags=["qa-logs"])
+def chat_qa_logs(chat_id: str, limit: int = 100):
+    """Recent logged Q&A turns for one chat."""
+    rows = db.fetch_qa_logs(chat_id=chat_id, limit=limit)
+    for row in rows:
+        row["created_at"] = row["created_at"].isoformat()
+    return rows
 
 
 # --------------------------------------------------------------------------- #

@@ -180,8 +180,9 @@ async function api(path, opts) {
 async function loadHealth() {
   try {
     const h = await (await api("/health")).json();
+    // Backend name + global chunk count are internal details — not shown in the UI.
     $("backend").innerHTML =
-      `🔌 <b>connected</b> · ${location.origin}<br>${h.backend} · ${h.total_chunks} chunks`;
+      `🔌 <b>connected</b> · ${location.origin}`;
   } catch (e) {
     $("backend").innerHTML = `<span style="color:var(--err)">⚠️ backend unreachable</span>`;
   }
@@ -313,6 +314,9 @@ function renderRagas(mt) {
     ["Faithfulness", mt.faithfulness],
     ["Answer relevancy", mt.answer_relevancy],
     ["Context precision", mt.context_precision],
+    ["Context relevancy", mt.context_relevancy],
+    ["Context recall", mt.context_recall],
+    ["Answer correctness", mt.answer_correctness],
   ].filter(([, v]) => v !== null && v !== undefined);
   if (!defs.length) return null;
   const cls = v => (v >= 0.7 ? "g" : v >= 0.4 ? "y" : "r");

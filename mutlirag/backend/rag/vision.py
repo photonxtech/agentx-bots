@@ -25,8 +25,8 @@ import config
 # indexed description never contains raw reasoning.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
-# Parse Groq's "Please try again in 7m48.72s" / "try again in 3.5s" hint.
-_RETRY_AFTER_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)s", re.IGNORECASE)
+# Parse Groq's "Please try again in 7m48.72s" / "3.5s" / "120ms" hint.
+_RETRY_AFTER_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)(ms|s)\b", re.IGNORECASE)
 
 # The vision model is rate-limited per minute AND per day. Serialize calls and
 # space them out so ingesting a multi-image file doesn't fire a burst that trips
@@ -42,7 +42,9 @@ def _retry_after_seconds(message: str) -> float | None:
     if not m:
         return None
     minutes = int(m.group(1)) if m.group(1) else 0
-    return minutes * 60 + float(m.group(2))
+    value = float(m.group(2))
+    seconds = value / 1000.0 if m.group(3).lower() == "ms" else value
+    return minutes * 60 + seconds
 
 
 def _throttle() -> None:
