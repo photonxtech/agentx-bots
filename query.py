@@ -55,7 +55,7 @@ def build_hybrid_retriever():
     )
 
     # Rerank merged candidates and keep only the top 4 most relevant
-    compressor = FlashrankRerank(top_n=4)
+    compressor = FlashrankRerank(top_n=6)
     compression_retriever = ContextualCompressionRetriever(
         base_compressor=compressor,
         base_retriever=ensemble_retriever

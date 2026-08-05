@@ -1,3 +1,7 @@
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -6,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from backend.routes.upload import router as upload_router
 from backend.routes.chat import router as chat_router
 from backend.routes.sessions import router as sessions_router
+
 
 app = FastAPI(
     title="WeNext AI PDF Copilot",

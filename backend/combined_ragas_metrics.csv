@@ -1,0 +1,110 @@
+question,faithfulness,answer_relevancy,context_precision,context_relevancy,context_recall,answer_correctness
+can you explain about this overall document in detailed,1.0,0.42,1.0,0.276,,
+what kind of questions can I ask from this document to a person if they have really read this pdf,0.75,0.119,0.917,0.146,,
+"How can you use the ""Sharing a skill"" approach to create a step-by-step guide for someone who knows nothing about the topic?",1.0,0.57,1.0,0.069,,
+"How does the color-coded language system work, and what are the different colors used for? What is the ""Two-Step Smart Track"" process, and how can it be applied in real-life situations?",0.733,0.633,,0.242,,0.612
+my manager is a green person how can I approach him?,0.222,0.485,,0.172,1.0,0.906
+What is a green person?,0.857,0.665,,0.081,,
+explain this pdf,0.85,0.373,0.583,0.089,,
+Directions of campaigns,1.0,0.303,0.25,0.214,,
+I asked about campaigns not templates.,1.0,0.321,0.333,0.143,,
+just give me about campaigns.,1.0,0.533,,0.207,,
+how do I navigate to leads?,1.0,0.721,1.0,0.091,,
+what are the lead catogeries,1.0,0.481,,0.2,,
+What is Instagram automation?,1.0,0.671,,0.176,,
+explain me about this pdf,1.0,0.488,0.639,0.107,,
+explian me about the pdf,0.75,0.151,0.833,0.182,,
+explain this pdf,0.833,0.163,0.639,0.136,,
+what happens if the payment fails,1.0,0.625,,0.121,,
+How many templates can I have?,1.0,0.55,,0.067,,0.136
+Can my tier be downgraded?,1.0,0.543,0.25,0.029,,
+explain ,0.0,0.108,0.5,0.75,,
+what is this pdf about?,1.0,0.517,,0.267,,
+what happens If my payment fails,1.0,0.621,0.75,0.111,,
+what are the eligibilities to use the wenext meta WhatsApp ,0.6,0.802,0.75,0.208,,
+what questions can I ask from this pdf,1.0,0.049,,0.143,,
+How do I migrate my existing WhatsApp Business App number?,1.0,0.892,,0.057,,
+what is this pdf about?,0.333,0.558,1.0,0.075,,
+what questions can I ask from the pdf,1.0,0.515,,0.27,,
+what is the document about,1.0,0.317,0.806,0.054,1.0,0.571
+how to build an AI pdf copilot,0.964,0.798,1.0,0.154,0.769,0.709
+generate a true or false test for me from the pdf,1.0,0.46,0.806,0.244,1.0,0.182
+what to do on Thursday,1.0,0.448,0.333,0.043,,
+what to do on Monday?,1.0,0.261,0.75,0.22,1.0,0.802
+today is Friday what to do today?\,1.0,0.449,0.333,0.488,,
+what happens if a payment fails?,1.0,0.697,0.75,0.133,,
+What is a message template and why do I need one?,0.333,0.692,,0.062,,
+How does automatic tier upgrade work?,1.0,0.68,,0.2,1.0,0.952
+What is a free entry point (FEP) and how does it help?,0.5,0.369,0.417,0.065,,
+What type of phone number can I use?,1.0,0.486,,0.098,,
+What is the Official Business Account (green tick)?,1.0,0.822,,0.182,,
+give me about pricing summary,1.0,0.455,0.917,0.333,,
+What is the Official Business Account (green tick)?,1.0,0.822,,0.182,,
+what is official business account?,1.0,0.269,0.5,0.115,,
+Can WeNext send templates on my behalf without me adding a payment method?,1.0,0.501,0.25,0.115,,
+what happens if payment fails?,1.0,0.625,0.75,0.121,,
+Who is the Prime Minister of India?,1.0,0.109,0.0,0.0,,
+what is this pdf about explian?,1.0,0.169,0.0,0.333,,
+What happens if the payment fails?,1.0,0.63,0.75,0.125,,
+what is this pdf about?,0.5,0.561,0.25,0.273,,
+who is narendra modi?,1.0,0.112,,0.115,,
+what is wenext?,1.0,0.569,,0.227,,
+what happens if my payment fails?,1.0,0.623,0.75,0.121,1.0,0.962
+whats there in this pdf?,1.0,0.143,,0.176,,
+whats in the second pdf,0.5,0.383,0.5,0.095,,
+whats in the wenext_meta pdf explain,0.875,0.743,,0.172,,
+are the 2 pdfs related?,0.2,0.659,0.0,0.111,0.0,0.911
+who is Sachin Tendulkar?,1.0,0.749,,0.0,,
+who is pm of India?,1.0,0.81,,0.0,,
+explain me all the topics in this pdf,1.0,0.249,0.75,0.4,,
+how do transformers work?,0.917,0.55,0.917,0.167,,
+what is self attention? How did it help,0.917,0.706,1.0,0.176,,
+explain me about the transformer architecture,1.0,0.491,,0.333,,
+whats there in this photo give me all the details in it,0.667,0.364,,0.211,,
+give me all that is there in this picture,0.4,0.258,0.333,0.154,,
+],0.5,0.147,,0.455,,
+ok,0.5,0.181,,0.182,1.0,0.804
+what happens if the payment fails?,1.0,0.63,1.0,0.16,,
+who is virat kohli?,1.0,0.11,,0.074,,
+what happens if my payment fails?,1.0,0.69,,0.2,1.0,0.962
+who is narendra modi?,1.0,0.112,0.0,0.176,,
+what happens if my payment fails?,1.0,0.69,,0.267,1.0,0.962
+what is an LLM?,0.333,0.822,0.25,0.231,,
+explain me this pdf,0.923,0.125,0.5,0.333,0.667,0.699
+how to implement the ai pdf copiolt?,0.929,0.59,0.333,0.882,,
+what does this image consist of give me all the info available,0.929,0.491,1.0,0.333,,
+for what is the booking conformed?,0.25,0.489,0.0,0.133,,
+where is the venue?\,0.5,0.498,0.5,0.1,0.8,0.885
+explain me about the getting started dashboard pdf what in there?,0.833,0.51,1.0,0.107,,
+can u explain me about llm documentation,0.333,0.725,0.333,0.087,0.0,0.156
+what,0.5,0.178,0.5,0.35,,
+how many times does wenext word present in the pd,0.5,0.729,0.417,0.091,,
+what does the image contain,0.818,0.425,0.5,0.441,,
+can u see a person there i am able to see,0.0,0.439,0.0,0.08,0.333,0.913
+what does this image consist of?,1.0,0.529,,0.222,,
+what does the image have?,0.5,0.558,0.5,0.536,,
+can you see a man wearing these as i see?,0.0,0.402,,0.0,,
+but there is no cat,1.0,0.212,,0.0,,
+then why havent you told this in the first responce?,0.5,0.262,,0.05,0.5,0.788
+what do you see in this image,1.0,0.452,,0.0,,
+explain me the image,1.0,0.355,0.333,0.0,,
+explain me the other image with a women,0.667,0.407,0.333,0.263,,
+what exactly is there in the potrait of a person describe his features,0.5,0.38,0.5,0.273,,
+tell me about the person,0.923,0.256,0.333,0.667,0.5,0.114
+what is langchain?,1.0,0.351,0.806,0.075,,
+What is Meta Business Manager and why do I need it?,0.75,0.76,0.417,0.094,,
+"Meta Business Manager (now called Meta Business Portfolio) is your central hub for all Meta assets — your Facebook Page, WhatsApp Business Account (WABA), ad accounts, and payment methods. You cannot connect to the WhatsApp Business API without an active, verified Business Manager.",0.714,0.7,,0.13,0.833,0.966
+why didnt you tell this the first time?,0.667,0.274,,0.138,0.5,0.802
+How do I create a Meta Business Manager?,0.857,0.824,0.833,0.375,,
+What must be active in Business Manager before onboarding with WeNext?,0.75,0.814,0.583,0.08,,
+What is Business Verification?,1.0,0.73,,0.217,,
+What documents does Meta accept for verification?,1.0,0.849,0.333,0.074,,
+you the answer in the pdf i provided,1.0,0.442,,0.72,,0.121
+How do I add a payment method in Meta?,0.857,0.851,,0.25,,
+How do I add a payment method in Meta?,1.0,0.811,,0.25,,
+What happens if my payment method fails?,1.0,0.715,,0.667,,
+"How do I move from Tier 0 (250 messages) to Tier 1 (2,000)?",1.0,0.547,,0.25,,
+Can I edit a template after submission?,1.0,0.702,,0.111,0.667,0.974
+Why do I need to send templates before activating flows?,0.75,0.349,,0.25,1.0,0.149
+What type of phone number can I use? • Any valid phone number that can receive,0.667,0.599,,0.167,,
+Q: Can two WeNext accounts share the same WhatsApp number?,1.0,0.664,,0.2,,

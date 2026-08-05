@@ -8,7 +8,7 @@ import sqlite3  # session persistence — replaces the old sessions.json flat fi
 from contextlib import contextmanager
 from pathlib import Path  # sets path
 from datetime import datetime  # timestamps creation
-
+from collections import defaultdict
 from langchain_community.document_loaders import PyPDFLoader  # load PDF -> Document objects
 from langchain_text_splitters import RecursiveCharacterTextSplitter  # split pages into chunks
 from langchain_huggingface import HuggingFaceEmbeddings  # embedding model (text -> vectors)
@@ -238,6 +238,11 @@ def _init_db():
         if "content_hash" not in existing_cols:
             conn.execute("ALTER TABLE session_files ADD COLUMN content_hash TEXT")
 
+        existing_turn_cols = [row[1] for row in conn.execute("PRAGMA table_info(chat_turns)").fetchall()]
+        for col in ["faithfulness", "answer_relevancy", "context_precision", "context_relevancy"]:
+            if col not in existing_turn_cols:
+                conn.execute(f"ALTER TABLE chat_turns ADD COLUMN {col} REAL")
+
 
 def _migrate_legacy_json_once():
     """One-time import of any existing sessions.json into sessions.db, so
@@ -330,23 +335,41 @@ def get_content_hashes(session_id):
     return {r[0] for r in rows}
 
 
-def append_chat_turn(session_id, question, answer, sources):
+def append_chat_turn(session_id, question, answer, sources, metrics=None):
+    metrics = metrics or {}
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO chat_turns (session_id, question, answer, sources) VALUES (?, ?, ?, ?)",
-            (session_id, question, answer, json.dumps(sources)),
+            "INSERT INTO chat_turns (session_id, question, answer, sources, "
+            "faithfulness, answer_relevancy, context_precision, context_relevancy) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id, question, answer, json.dumps(sources),
+                metrics.get("faithfulness"), metrics.get("answer_relevancy"),
+                metrics.get("context_precision"), metrics.get("context_relevancy"),
+            ),
         )
 
 
 def get_chat_history(session_id):
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT question, answer, sources FROM chat_turns WHERE session_id = ? ORDER BY id",
+            "SELECT question, answer, sources, faithfulness, answer_relevancy, "
+            "context_precision, context_relevancy FROM chat_turns WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
     return [
-        {"question": q, "answer": a, "sources": json.loads(s)}
-        for q, a, s in rows
+        {
+            "question": q,
+            "answer": a,
+            "sources": json.loads(s),
+            "metrics": {
+                "faithfulness": faith,
+                "answer_relevancy": rel,
+                "context_precision": prec,
+                "context_relevancy": ctxrel,
+            },
+        }
+        for q, a, s, faith, rel, prec, ctxrel in rows
     ]
 
 
@@ -461,13 +484,44 @@ def process_pdf(pdf_path, session_id):
     """
     loader = PyPDFLoader(pdf_path)
     documents = loader.load()
-
+    print("\n========== PDF DEBUG ==========")
+    print("PDF:", pdf_path)
+    print("Pages:", len(documents)) 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150,
+        chunk_size=990,
+        chunk_overlap=200,
         separators=["\n\n", "\n", ". ", " ", ""]
     )
     new_chunks = splitter.split_documents(documents)
+    print("Chunks created:", len(new_chunks))
+
+    print("\n========== SEARCHING FOR BUSINESS VERIFICATION ==========")
+
+    keywords = [
+        "gst registration",
+        "certificate of incorporation",
+        "business license",
+        "trade license",
+        "utility bill",
+        "bank statement",
+        "business verification"
+    ]
+
+    found = False
+
+    for i, chunk in enumerate(new_chunks):
+        text = chunk.page_content.lower()
+
+        if any(k in text for k in keywords):
+            found = True
+            print(f"\nFOUND IN CHUNK {i+1}")
+            print("Page:", chunk.metadata.get("page"))
+            print(chunk.page_content)
+
+    if not found:
+        print("❌ BUSINESS VERIFICATION NOT FOUND IN ANY CHUNK")
+
+    print("====================================")
 
     # Tag each chunk with a clean filename (PyPDFLoader's default 'source' is
     # the full temp file path, which is useless to show a user)
@@ -613,7 +667,6 @@ def process_image(image_path, session_id):
 
 
 def build_hybrid_retriever(session_id):
-    """Loads this session's FULL chunk set (across all its PDFs) + vector DB, builds hybrid retriever."""
     chunks_path = CHUNKS_ROOT / f"{session_id}.pkl"
     with open(chunks_path, "rb") as f:
         chunks = pickle.load(f)
@@ -621,21 +674,27 @@ def build_hybrid_retriever(session_id):
     bm25_retriever = BM25Retriever.from_documents(chunks)
     bm25_retriever.k = 10
 
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
     persist_dir = CHROMA_ROOT / session_id
-    vectordb = Chroma(persist_directory=str(persist_dir), embedding_function=embeddings)
-    vector_retriever = vectordb.as_retriever(search_kwargs={"k": 10})
+
+    vectordb = Chroma(
+        persist_directory=str(persist_dir),
+        embedding_function=embeddings
+    )
+
+    vector_retriever = vectordb.as_retriever(
+        search_kwargs={"k": 10}
+    )
 
     ensemble_retriever = EnsembleRetriever(
         retrievers=[bm25_retriever, vector_retriever],
         weights=[0.4, 0.6]
     )
 
-    compressor = FlashrankRerank(top_n=4)
-    return ContextualCompressionRetriever(
-        base_compressor=compressor,
-        base_retriever=ensemble_retriever
-    )
+    return ensemble_retriever
 
 
 def get_full_documents_by_source(session_id):
@@ -754,7 +813,10 @@ def get_answer(retriever, question, chat_history, session_id=None):
     # deterministic, factual answers
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
-    if session_id and is_broad_summary_question(question):
+    print("Question:", question)
+    print("Broad summary?", is_broad_summary_question(question))
+
+    if session_id and is_broad_summary_question(question):        
         scope = classify_summary_scope(question)
         separate = wants_separate_answers(question)
         docs_by_source = get_full_documents_by_source(session_id)
@@ -834,12 +896,24 @@ def get_answer(retriever, question, chat_history, session_id=None):
     # 2. Retrieve using the standalone question, not the raw follow-up
     docs = retriever.invoke(standalone_question)
 
-    relevant_docs = [
-        doc for doc in docs
-        if doc.metadata.get("relevance_score", 0) >= RELEVANCE_THRESHOLD
-    ]
+    # Keep only the top 3 retrieved chunks
+    docs = docs[:3]
 
-    if not relevant_docs:
+    print("\n" + "="*80)
+    print("QUESTION:", question)
+    print("STANDALONE QUESTION:", standalone_question)
+    print("DOCUMENTS RETRIEVED:", len(docs))
+
+    for i, doc in enumerate(docs):
+        print(f"\n----- DOCUMENT {i+1} -----")
+        print("Source:", doc.metadata.get("source"))
+        print("Page:", doc.metadata.get("page"))
+        print("Metadata:", doc.metadata)
+        print("Content:")
+        print(doc.page_content[:500])
+        print("="*80 + "\n")
+
+    if not docs:
         return (
             "That doesn't seem to be covered in your uploaded document(s).",
             [],
@@ -849,8 +923,7 @@ def get_answer(retriever, question, chat_history, session_id=None):
                 "total_tokens": condense_tokens.get("total_tokens", 0),
             }
         )
-
-    docs = relevant_docs
+    
     context = format_docs(docs)
     history_text = format_history(chat_history)
 
@@ -879,19 +952,25 @@ def get_answer(retriever, question, chat_history, session_id=None):
     # BM25 + vector both surfacing the same PDF page), which showed up as
     # repeated identical entries in the Sources list. Keep the first chunk
     # seen per (source, page) — that's enough to show where the answer came from.
-    seen = set()
+    # Keep each retrieved chunk separately for RAG evaluation.
+    # Context precision needs individual chunks, not merged documents.
+
     sources = []
+
     for doc in docs:
-        page = doc.metadata.get("page", "unknown")
-        source_file = doc.metadata.get("source", "unknown")
-        key = (source_file, page)
-        if key in seen:
-            continue
-        seen.add(key)
+        source = doc.metadata.get("source", "Unknown")
+        page = doc.metadata.get("page")
+
         sources.append({
-            "source": source_file,
+            "source": source,
             "page": page,
             "text": doc.page_content
         })
+
+    print("\n===== INDIVIDUAL SOURCES =====")
+    for i, s in enumerate(sources):
+        print(
+            f"SOURCE {i}: {s['source']} -> Page {s['page']}"
+        )
 
     return answer, sources, token_usage

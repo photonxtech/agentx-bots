@@ -22,6 +22,28 @@ function isImageFile(name) {
     return /\.(png|jpe?g|webp)$/i.test(name);
 }
 
+// Detects fallback / "I don't know" style answers so we can suppress
+// the Sources panel for them (retrieval still ran, but nothing useful
+// was found, so showing "Sources" next to "I don't know" is misleading).
+function isFallbackAnswer(text) {
+    if (!text) return false;
+    const t = text.trim();
+
+    const patterns = [
+        /^i don'?t know\.?$/i,
+        /^i do not know\.?$/i,
+        /^i'?m not sure\.?$/i,
+        /^oops i don'?t know\.?$/i,
+        /i don'?t have (enough|sufficient) information/i,
+        /i (could not|couldn'?t) find/i,
+        /no relevant information/i,
+        /not (mentioned|found|available) in the (provided|given|uploaded)? ?(context|document|pdf)/i,
+        /the (document|context|pdf) does(n'?t| not) (contain|mention|include)/i,
+    ];
+
+    return patterns.some(p => p.test(t));
+}
+
 function renderDocList(pdfNames) {
     if (!pdfNames || pdfNames.length === 0) {
         docListContainer.innerHTML = `<span class="empty-hint">No documents in this chat yet.</span>`;
@@ -80,34 +102,88 @@ function renderMessage(role, content, extraHtml = "") {
     chatWindow.appendChild(wrapper);
 }
 
-function sourcesHtml(sources, tokenUsage) {
+function sourcesHtml(sources, tokenUsage, answerText = "") {
+
     let parsedSources = sources || [];
+    console.log("SOURCES FROM BACKEND:", parsedSources);
+
     if (typeof parsedSources === "string") {
-        try { parsedSources = JSON.parse(parsedSources); } catch { parsedSources = []; }
+        try {
+            parsedSources = JSON.parse(parsedSources);
+        } catch {
+            parsedSources = [];
+        }
     }
 
-    const sourcesBlock = parsedSources.length
+    // Don't show sources next to a fallback / "I don't know" answer —
+    // retrieval ran, but nothing it found was actually used.
+    const suppressSources = isFallbackAnswer(answerText);
+
+    const sourcesBlock = (parsedSources.length && !suppressSources)
         ? `<details class="sources-toggle">
-             <summary>Sources (${parsedSources.length})</summary>
-             ${parsedSources.map(s => {
-                 const page = typeof s.page === "number" ? s.page + 1 : s.page;
-                 return `<div class="source-line">${s.source || "unknown"} — page ${page}</div>`;
-             }).join("")}
-           </details>`
+                <summary>Sources (${parsedSources.length})</summary>
+
+                ${parsedSources.map(s => {
+
+                    let pageText = "Entire document";
+
+                    if (Array.isArray(s.pages) && s.pages.length) {
+                        const pages = [...new Set(s.pages)]
+                            .map(p => p + 1)
+                            .sort((a, b) => a - b);
+
+                        pageText = "Pages: " + pages.join(", ");
+                    }
+
+                    return `
+                        <div class="source-line">
+                            <strong>📄 ${s.source}</strong><br>
+                            ${pageText}
+                        </div>
+                    `;
+                }).join("")}
+
+            </details>`
         : "";
 
-    const tokenBlock = tokenUsage
-        ? `<div class="token-caption">${tokenUsage.prompt_tokens ?? 0} prompt · ${tokenUsage.completion_tokens ?? 0} completion · ${tokenUsage.total_tokens ?? 0} total</div>`
+    const tokenBlock = (tokenUsage && !suppressSources)
+        ? `<div class="token-caption">
+                ${tokenUsage.prompt_tokens ?? 0} prompt ·
+                ${tokenUsage.completion_tokens ?? 0} completion ·
+                ${tokenUsage.total_tokens ?? 0} total
+           </div>`
         : "";
 
     return sourcesBlock + tokenBlock;
+}
+
+function metricsHtml(metrics, answerText = "") {
+    if (isFallbackAnswer(answerText)) return "";
+    if (!metrics) metrics = {};
+
+    const labels = {
+        faithfulness: "Faithfulness",
+        answer_relevancy: "Answer Relevance",
+        context_precision: "Context Precision",
+        context_relevancy: "Context Relevance",
+    };
+
+    const items = Object.entries(labels)
+        .map(([key, label]) => {
+            const val = metrics[key];
+            const display = (val === null || val === undefined) ? "N/A" : val;
+            return `<span class="metric-badge">${label}: ${display}</span>`;
+        })
+        .join("");
+
+    return `<div class="metrics-row">${items}</div>`;
 }
 
 function renderChatHistory(chatHistory) {
     chatWindow.innerHTML = "";
     (chatHistory || []).forEach(turn => {
         renderMessage("user", turn.question);
-        renderMessage("assistant", turn.answer, sourcesHtml(turn.sources, null));
+        renderMessage("assistant", turn.answer, sourcesHtml(turn.sources, null, turn.answer) + metricsHtml(turn.metrics, turn.answer));
     });
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
@@ -314,7 +390,7 @@ async function sendMessage() {
         if (data.error) {
             renderMessage("assistant", `❌ ${data.error}`);
         } else {
-            renderMessage("assistant", data.answer, sourcesHtml(data.sources, data.token_usage));
+            renderMessage("assistant", data.answer, sourcesHtml(data.sources, data.token_usage, data.answer) + metricsHtml(data.metrics, data.answer));
         }
 
         chatWindow.scrollTop = chatWindow.scrollHeight;

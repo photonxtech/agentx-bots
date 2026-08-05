@@ -5,6 +5,11 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
+:root{
+    --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "STIX Two Text", Georgia, serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
 body{
     background:#F7F5F2;
     color:#2B2B29;
@@ -55,8 +60,8 @@ body{
 }
 
 .section-label{
-    margin-top:20px;
-    margin-bottom:10px;
+    margin-top:14px;
+    margin-bottom:6px;
     font-size:11px;
     text-transform:uppercase;
     letter-spacing:0.06em;
@@ -174,9 +179,9 @@ body{
 .history-row{
     display:flex;
     align-items:center;
-    gap:6px;
-    margin-bottom:2px;
-    border-radius:8px;
+    gap:4px;
+    margin-bottom:0px;
+    border-radius:6px;
     transition:background .15s;
 }
 
@@ -186,12 +191,12 @@ body{
 
 .history-item{
     flex:1;
-    padding:10px 10px;
+    padding:5px 8px;
     cursor:pointer;
     overflow:hidden;
     display:flex;
     flex-direction:column;
-    gap:2px;
+    gap:0px;
 }
 
 .history-item.active{
@@ -201,12 +206,13 @@ body{
 .history-item strong{
     display:flex;
     align-items:center;
-    gap:8px;
+    gap:6px;
     white-space:nowrap;
     overflow:hidden;
     text-overflow:ellipsis;
-    font-size:14px;
-    font-weight:500;
+    font-size:13px;
+    font-weight:400;
+    line-height:1.2;
     color:#2B2B29;
 }
 
@@ -216,7 +222,7 @@ body{
 
 .history-item strong::before{
     content:"💬";
-    font-size:12px;
+    font-size:11px;
     flex-shrink:0;
 }
 
@@ -228,9 +234,9 @@ body{
     background:none;
     border:none;
     cursor:pointer;
-    font-size:14px;
+    font-size:13px;
     color:#B0ACA3;
-    padding:6px 10px 6px 0;
+    padding:5px 8px 5px 0;
     opacity:0;
     transition:opacity .15s;
 }
@@ -258,9 +264,10 @@ body{
 }
 
 .welcome h1{
+    font-family:var(--font-serif);
     font-size:40px;
     margin-bottom:10px;
-    font-weight:600;
+    font-weight:500;
     color:#2B2B29;
 }
 
@@ -324,6 +331,7 @@ body{
     color:#2B2B29;
     line-height:1.75;
     font-size:15.5px;
+    font-family:var(--font-serif);
 }
 
 .assistant-message p{
@@ -481,4 +489,18 @@ body{
 .input-area button:hover{
     background:#C4633F;
     transform:translateY(-1px);
+}
+.metrics-row {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.metric-badge {
+    font-size: 11px;
+    color: #6B6760;
+    background: #F1EFE9;
+    border: 1px solid #E7E4DD;
+    border-radius: 6px;
+    padding: 3px 8px;
 }
