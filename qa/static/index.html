@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full antialiased">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QA Automation & DeepEval Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 h-full flex overflow-hidden font-sans text-slate-100">
+
+    <!-- Sidebar: Sessions List -->
+    <aside class="w-72 bg-slate-950 text-slate-300 flex flex-col border-r border-slate-800/80 shrink-0 select-none">
+        <div class="p-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-950">
+            <div class="flex items-center gap-3">
+                <div class="h-8 w-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                    <i class="fa-solid fa-vial-circle-check text-base"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-white text-sm tracking-wide">QA Studio</h1>
+                    <p class="text-[10px] text-slate-500 font-medium">DeepEval Automation</p>
+                </div>
+            </div>
+            <button onclick="createNewSession()" class="bg-indigo-600 hover:bg-indigo-500 text-white h-8 w-8 rounded-lg text-xs transition flex items-center justify-center shadow-lg shadow-indigo-600/20 active:scale-95" title="New Session">
+                <i class="fa-solid fa-plus"></i>
+            </button>
+        </div>
+
+        <div class="px-4 pt-4 pb-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Test Sessions</span>
+            <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">History</span>
+        </div>
+
+        <div id="sessionsList" class="flex-1 overflow-y-auto px-3 space-y-1 py-1 custom-scrollbar">
+            <!-- Rendered dynamically -->
+        </div>
+
+        <div class="p-3 border-t border-slate-800/80 bg-slate-950">
+            <button onclick="exportGoldenDataset()" class="w-full bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 border border-slate-700/60 transition group shadow-sm">
+                <i class="fa-solid fa-download text-amber-400 group-hover:scale-110 transition-transform"></i> 
+                Export Golden Dataset
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 flex flex-col min-w-0 bg-slate-900 overflow-hidden">
+        
+        <!-- Top Workspace Bar -->
+        <header class="h-16 bg-slate-950 border-b border-slate-800/80 px-6 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-3 min-w-0">
+                <div class="truncate">
+                    <h2 id="sessionTitle" class="text-base font-semibold text-white truncate">Select or Create a Session</h2>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <span id="sessionStatusBadge" class="inline-flex items-center text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                            No Session Loaded
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3 shrink-0">
+                <button onclick="openModelsModal()" class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium px-3 py-2 rounded-lg flex items-center gap-2 border border-slate-700/80 transition active:scale-95 shadow-sm">
+                    <i class="fa-solid fa-sliders text-indigo-400"></i> Models & Params
+                </button>
+
+                <button id="approveBtn" onclick="approveGolden()" disabled class="bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:hover:bg-amber-500 text-slate-950 text-xs font-semibold px-3.5 py-2 rounded-lg flex items-center gap-2 transition shadow-md shadow-amber-500/10 active:scale-95">
+                    <i class="fa-solid fa-star text-slate-950"></i> Save to Golden Dataset
+                </button>
+            </div>
+        </header>
+
+        <!-- Editor & Results Main Grid -->
+        <div class="flex-1 p-6 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-6 bg-slate-900">
+            
+            <!-- Left Panel: Input Configuration -->
+            <div class="space-y-4 flex flex-col h-full min-h-0">
+                
+                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-3">
+                    <div class="flex items-center justify-between">
+                        <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <i class="fa-solid fa-file-arrow-up text-indigo-400"></i> Source Document
+                        </label>
+                        <span class="text-[10px] text-slate-500">PDF, TXT, MD</span>
+                    </div>
+                    
+                    <div class="relative flex items-center justify-center w-full">
+                        <input type="file" id="fileInput" class="block w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600/20 file:text-indigo-300 hover:file:bg-indigo-600/30 file:transition cursor-pointer bg-slate-900 border border-slate-800 rounded-lg p-1">
+                    </div>
+                    <p id="existingFileName" class="text-xs text-indigo-400 font-mono hidden flex items-center gap-1.5 pt-1">
+                        <i class="fa-solid fa-paperclip"></i> <span></span>
+                    </p>
+                </div>
+
+                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm flex-1 flex flex-col space-y-2 min-h-[300px]">
+                    <div class="flex items-center justify-between">
+                        <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <i class="fa-solid fa-code text-indigo-400"></i> Target JSON Schema / Guidelines
+                        </label>
+                        <span class="text-[10px] text-slate-500 font-mono">JSON</span>
+                    </div>
+                    <textarea id="sampleJsonInput" class="w-full flex-1 p-3.5 bg-slate-900 text-indigo-300 rounded-lg font-mono text-xs border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none leading-relaxed" placeholder='{ "test_cases": [ { "input": "...", "expected": "..." } ] }'></textarea>
+                </div>
+
+                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <i class="fa-solid fa-layer-group text-indigo-400"></i> Test Case Depth
+                        </label>
+                        <span class="text-[10px] text-slate-500">Count controls scope</span>
+                    </div>
+                    <select id="testCaseCountInput" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer">
+                        <option value="10">10 — Core concepts only</option>
+                        <option value="20" selected>20 — Core + Sub-topics</option>
+                        <option value="30">30 — Deep observation (edge cases + cross-refs)</option>
+                    </select>
+                </div>
+
+                <button id="generateBtn" onclick="runGeneration()" disabled class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-600/20 transition flex items-center justify-center gap-2 active:scale-[0.99] shrink-0">
+                    <i class="fa-solid fa-bolt"></i> Generate QA Testcases & Evaluate
+                </button>
+            </div>
+
+            <!-- Right Panel: Output & Dynamic Metrics Dashboard -->
+            <div class="space-y-4 flex flex-col h-full min-h-0">
+                
+                <!-- Dynamic Multi-Metric DeepEval Panel -->
+                <div id="evalPanel" class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm hidden space-y-4">
+                    <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-chart-line text-indigo-400 text-sm"></i>
+                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">DeepEval Metrics Breakdown</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span id="overallScoreHeader" class="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Overall: 0%</span>
+                            <span id="evalPassedBadge" class="text-[10px] font-bold px-2.5 py-0.5 rounded-full border"></span>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Metric Cards Grid -->
+                    <div id="metricsGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
+                        <!-- Populated Dynamically based on backend response -->
+                    </div>
+
+                    <!-- Evaluation Run Metadata (non-metric context, not rendered as score cards) -->
+                    <div id="evalMetaRow" class="hidden flex items-center gap-2 flex-wrap text-[10px] font-mono">
+                        <span id="evalChunkCountBadge" class="hidden px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
+                        <span id="evalRefTypeBadge" class="hidden px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
+                    </div>
+
+                    <!-- Detailed Metric Feedback & Reasons -->
+                    <div id="evalReasoningContainer" class="text-xs bg-slate-900/60 p-3 rounded-lg border border-slate-800/80 text-slate-300 space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <span class="font-semibold text-slate-300 text-[11px] uppercase tracking-wider">Evaluation Reasoning & Diagnostics</span>
+                            <span id="metricReasonCount" class="text-[10px] text-slate-500 font-mono"></span>
+                        </div>
+                        <div id="evalReasonText" class="space-y-1 text-slate-400 font-mono text-[11px] max-h-32 overflow-y-auto custom-scrollbar leading-relaxed"></div>
+                    </div>
+                </div>
+
+                <!-- Generated Dataset Output -->
+                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm flex-1 flex flex-col min-h-[350px]">
+                    <div class="flex items-center justify-between mb-2 gap-2">
+                        <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2 shrink-0">
+                            <i class="fa-solid fa-file-code text-indigo-400"></i> Generated QA Dataset
+                        </label>
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span id="countBadge" class="hidden text-[10px] text-slate-500 font-mono truncate"></span>
+                            <select id="exportFormatInput" onchange="renderOutputPreview()" title="Export format" class="bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-[10px] text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer shrink-0">
+                                <option value="json" selected>JSON</option>
+                                <option value="jsonl">JSONL</option>
+                                <option value="qa">QA (Text)</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <pre id="outputJson" class="w-full flex-1 p-3.5 bg-slate-900 text-emerald-400 rounded-lg font-mono text-xs overflow-auto border border-slate-800/80 leading-relaxed custom-scrollbar">No output generated yet.</pre>
+                    
+                    <div class="mt-3 flex justify-end">
+                        <button id="downloadJsonBtn" onclick="downloadCurrentOutput()" disabled class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2 px-3.5 rounded-lg flex items-center gap-2 border border-slate-700/80 disabled:opacity-30 transition">
+                            <i class="fa-solid fa-download text-emerald-400"></i> Download Output
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Models & Parameters Configuration Modal -->
+    <div id="modelsModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-xl w-full p-6 space-y-5 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-indigo-400"></i> Models & Parameter Configuration
+                </h3>
+                <button onclick="closeModelsModal()" class="text-slate-400 hover:text-white transition">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+
+            <form id="modelsForm" onsubmit="handleModelFormSubmit(event)" class="space-y-4 overflow-y-auto pr-1 flex-1 custom-scrollbar">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chat Model</label>
+                        <input type="text" id="chatModelInput" placeholder="gpt-4o, claude-3-5-sonnet..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                    </div>
+
+                    <div>
+                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Embedding Model</label>
+                        <input type="text" id="embeddingModelInput" placeholder="text-embedding-3-small..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                    </div>
+
+                    <div>
+                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chunk Size</label>
+                        <input type="number" id="chunkSizeInput" placeholder="1000" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                    </div>
+
+                    <div>
+                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chunk Overlap</label>
+                        <input type="number" id="chunkOverlapInput" placeholder="200" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                    </div>
+
+                    <div>
+                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Top K</label>
+                        <input type="number" id="topKInput" placeholder="4" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                    </div>
+
+                    <div>
+                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Search Model</label>
+                        <input type="text" id="searchModelInput" placeholder="similarity" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                    </div>
+
+                    <div class="col-span-2 pt-1">
+                        <div class="flex justify-between items-center mb-1.5">
+                            <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Temperature</label>
+                            <span id="tempValueDisplay" class="text-xs font-mono font-bold text-indigo-400">0.0</span>
+                        </div>
+                        <input type="range" id="temperatureInput" min="0" max="1" step="0.05" value="0" oninput="document.getElementById('tempValueDisplay').innerText = this.value" class="w-full accent-indigo-500 h-1 bg-slate-950 rounded-lg appearance-none cursor-pointer">
+                    </div>
+                </div>
+
+                <div class="pt-3">
+                    <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 px-4 rounded-lg text-xs transition shadow-md shadow-indigo-600/20">
+                        Save Configuration
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- JavaScript Logic with Dynamic Metric Rendering -->
+    <script>
+        let activeSessionId = null;
+        let currentGeneratedData = null;
+        const sessionConfigs = {};
+
+        async function loadSessions() {
+            try {
+                const res = await fetch('/api/sessions');
+                const sessions = await res.json();
+                const list = document.getElementById('sessionsList');
+                list.innerHTML = '';
+
+                sessions.forEach(s => {
+                    const btn = document.createElement('button');
+                    btn.onclick = () => selectSession(s.id);
+                    btn.className = `w-full text-left px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-between transition ${s.id === activeSessionId ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`;
+                    btn.innerHTML = `
+                        <span class="truncate pr-2 font-mono text-[11px]">${s.title}</span>
+                        ${s.is_golden ? '<i class="fa-solid fa-star text-amber-400 text-[10px]"></i>' : ''}
+                    `;
+                    list.appendChild(btn);
+                });
+            } catch (err) {
+                console.error("Failed loading sessions:", err);
+            }
+        }
+
+        async function createNewSession() {
+            try {
+                const res = await fetch('/api/sessions', { method: 'POST' });
+                const data = await res.json();
+                await loadSessions();
+                selectSession(data.id);
+            } catch (err) {
+                alert("Could not create new session.");
+            }
+        }
+
+        async function selectSession(sessionId) {
+            activeSessionId = sessionId;
+            await loadSessions();
+
+            try {
+                const res = await fetch(`/api/sessions/${sessionId}`);
+                const s = await res.json();
+
+                document.getElementById('sessionTitle').innerText = s.title;
+                document.getElementById('sampleJsonInput').value = s.sample_json || '';
+                document.getElementById('testCaseCountInput').value = s.test_case_count ? String(s.test_case_count) : '20';
+                
+                const badge = document.getElementById('sessionStatusBadge');
+                badge.innerText = s.is_golden ? 'Golden Dataset' : (s.status || 'Active');
+                badge.className = `inline-flex items-center text-[10px] font-medium px-2 py-0.5 rounded-full border ${s.is_golden ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`;
+
+                // Reset the native file picker's own selection/display whenever
+                // switching sessions — the browser otherwise keeps showing the
+                // previously chosen filename even for a session that has no
+                // file selected yet, and a stale File object could get resent
+                // on the next Generate click.
+                document.getElementById('fileInput').value = '';
+
+                const fileNameText = document.getElementById('existingFileName');
+                if (s.filename) {
+                    fileNameText.querySelector('span').innerText = s.filename;
+                    fileNameText.classList.remove('hidden');
+                } else {
+                    fileNameText.classList.add('hidden');
+                }
+
+                currentGeneratedData = s.generated_data;
+                
+                if (currentGeneratedData) {
+                    renderOutputPreview();
+                    document.getElementById('downloadJsonBtn').disabled = false;
+                    updateCountBadge(s.test_case_count, currentGeneratedData);
+                } else {
+                    document.getElementById('outputJson').innerText = 'No output generated yet.';
+                    document.getElementById('downloadJsonBtn').disabled = true;
+                    updateCountBadge(null, null);
+                }
+
+                if (s.deepeval_details) {
+                    renderEvaluation(s.deepeval_details);
+                } else {
+                    document.getElementById('evalPanel').classList.add('hidden');
+                }
+
+                document.getElementById('generateBtn').disabled = false;
+                document.getElementById('approveBtn').disabled = !s.generated_data;
+
+            } catch (err) {
+                console.error("Error loading session details:", err);
+            }
+        }
+
+        // Fully Dynamic DeepEval Multi-Metric Renderer
+        function renderEvaluation(details) {
+            if (!details) return;
+
+            const panel = document.getElementById('evalPanel');
+            panel.classList.remove('hidden');
+
+            const overall = details.overall_score !== undefined ? details.overall_score : details.score;
+            const passed = details.passed;
+
+            document.getElementById('overallScoreHeader').innerText = `Overall: ${Math.round((overall || 0) * 100)}%`;
+
+            const badge = document.getElementById('evalPassedBadge');
+            badge.innerText = passed ? 'PASSED' : 'NEEDS REVIEW';
+            badge.className = passed 
+                ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20';
+
+            const metricsGrid = document.getElementById('metricsGrid');
+            metricsGrid.innerHTML = '';
+
+            // Map of standard metric keys to user-friendly titles and colors
+            const metricKeyMap = {
+                'faithfulness': { title: 'Faithfulness', color: 'emerald' },
+                'contextual_precision': { title: 'Context Precision', color: 'indigo' },
+                'contextual_recall': { title: 'Context Recall', color: 'blue' },
+                'contextual_relevancy': { title: 'Context Relevancy', color: 'sky' },
+                'answer_relevancy': { title: 'Answer Relevancy', color: 'violet' },
+                'g_eval': { title: 'G-Eval Schema', color: 'purple' },
+                'hallucination': { title: 'Hallucination', color: 'rose' },
+                'toxicity': { title: 'Toxicity', color: 'amber' },
+                'bias': { title: 'Bias Metric', color: 'pink' }
+            };
+
+            // Fields that are run metadata, not scored metrics — must be excluded
+            // from the generic numeric-field fallback below, or they'd render as
+            // bogus metric cards (e.g. retrieval_chunk_count: 6 -> "600%").
+            const NON_METRIC_FIELDS = [
+                'overall_score', 'score', 'passed', 'reason', 'reasons',
+                'used_independent_reference', 'retrieval_chunk_count'
+            ];
+
+            // Collect metrics dict from details.metrics or key-value pairs in deepeval_details
+            let metricsToRender = details.metrics || {};
+            if (Object.keys(metricsToRender).length === 0) {
+                // Fallback: extract any metric numerical fields from deepeval_details
+                Object.keys(details).forEach(k => {
+                    if (NON_METRIC_FIELDS.includes(k)) return;
+                    if (typeof details[k] === 'number' || typeof details[k] === 'object') {
+                        metricsToRender[k] = details[k];
+                    }
+                });
+            }
+
+            // Render each metric card dynamically
+            Object.entries(metricsToRender).forEach(([key, val]) => {
+                let score = typeof val === 'object' ? val.score : val;
+                let isMetricPassed = typeof val === 'object' ? val.passed : score >= 0.7;
+                let pct = Math.round((score || 0) * 100);
+
+                const config = metricKeyMap[key] || { 
+                    title: key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()), 
+                    color: 'indigo' 
+                };
+
+                const card = document.createElement('div');
+                card.className = 'bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 flex flex-col justify-between';
+                card.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] font-medium text-slate-400 truncate pr-1">${config.title}</span>
+                        <span class="h-1.5 w-1.5 rounded-full ${isMetricPassed ? 'bg-emerald-400' : 'bg-amber-400'}"></span>
+                    </div>
+                    <div class="flex items-baseline justify-between mt-1">
+                        <span class="text-base font-bold font-mono text-slate-100">${pct}%</span>
+                        <span class="text-[9px] font-mono ${isMetricPassed ? 'text-emerald-400' : 'text-amber-400'}">
+                            ${isMetricPassed ? 'Pass' : 'Fail'}
+                        </span>
+                    </div>
+                    <div class="w-full bg-slate-800 h-1 rounded-full mt-1.5 overflow-hidden">
+                        <div class="bg-${config.color}-500 h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                    </div>
+                `;
+                metricsGrid.appendChild(card);
+            });
+
+            // Run metadata badges: how many retrieval chunks were used, and
+            // whether ContextualRecall compared against a real independent
+            // reference vs. a golden sample_json.
+            const metaRow = document.getElementById('evalMetaRow');
+            const chunkBadge = document.getElementById('evalChunkCountBadge');
+            const refBadge = document.getElementById('evalRefTypeBadge');
+            let anyMeta = false;
+
+            if (typeof details.retrieval_chunk_count === 'number') {
+                chunkBadge.innerText = `${details.retrieval_chunk_count} retrieval chunk${details.retrieval_chunk_count === 1 ? '' : 's'}`;
+                chunkBadge.classList.remove('hidden');
+                anyMeta = true;
+            } else {
+                chunkBadge.classList.add('hidden');
+            }
+
+            if (typeof details.used_independent_reference === 'boolean') {
+                refBadge.innerText = details.used_independent_reference
+                    ? 'Reference: auto-generated'
+                    : 'Reference: golden sample_json';
+                refBadge.classList.remove('hidden');
+                anyMeta = true;
+            } else {
+                refBadge.classList.add('hidden');
+            }
+
+            metaRow.classList.toggle('hidden', !anyMeta);
+            if (anyMeta) metaRow.classList.add('flex');
+
+            // Handle Evaluation Reasoning / Feedback list
+            const reasonContainer = document.getElementById('evalReasonText');
+            reasonContainer.innerHTML = '';
+
+            // Prefer a structured reasons array if the backend provides one.
+            // Otherwise split the backend's single pipe-delimited reason string
+            // (e.g. "Faithfulness: ... | Answer Rel: ... | ...") into one
+            // readable line per metric instead of showing it as one dense blob.
+            let reasons = details.reasons ||
+                (details.reason ? details.reason.split(' | ').map(s => s.trim()).filter(Boolean) : []);
+            if (reasons.length > 0) {
+                reasons.forEach((r, idx) => {
+                    const p = document.createElement('p');
+                    p.className = 'border-l-2 border-indigo-500/50 pl-2 py-0.5';
+                    p.innerText = typeof r === 'object' ? `${r.metric}: ${r.reason}` : r;
+                    reasonContainer.appendChild(p);
+                });
+                document.getElementById('metricReasonCount').innerText = `${reasons.length} note(s)`;
+            } else {
+                reasonContainer.innerText = 'All metrics evaluated successfully with no warning flags.';
+                document.getElementById('metricReasonCount').innerText = '';
+            }
+        }
+
+        // Shows "Requested: N · Generated: M" next to the output panel.
+        // Accepts either a precomputed actual count or the generated data
+        // itself (used when restoring a session, where we only have the
+        // stored JSON, not the original requested/actual response fields).
+        function updateCountBadge(requestedCount, actualCountOrData) {
+            const badge = document.getElementById('countBadge');
+            if (!requestedCount) {
+                badge.classList.add('hidden');
+                return;
+            }
+
+            let actualCount = actualCountOrData;
+            if (typeof actualCount !== 'number') {
+                const data = actualCountOrData;
+                if (Array.isArray(data)) {
+                    actualCount = data.length;
+                } else if (data && typeof data === 'object') {
+                    const arrField = Object.values(data).find(v => Array.isArray(v));
+                    actualCount = arrField ? arrField.length : null;
+                } else {
+                    actualCount = null;
+                }
+            }
+
+            badge.innerText = actualCount !== null && actualCount !== undefined
+                ? `Requested: ${requestedCount} · Generated: ${actualCount}`
+                : `Requested: ${requestedCount}`;
+            badge.classList.remove('hidden');
+        }
+
+        async function runGeneration() {
+            if (!activeSessionId) return;
+
+            const btn = document.getElementById('generateBtn');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Processing & Evaluating...`;
+
+            const formData = new FormData();
+            formData.append('sample_json', document.getElementById('sampleJsonInput').value);
+            formData.append('test_case_count', document.getElementById('testCaseCountInput').value);
+            
+            const fileInput = document.getElementById('fileInput');
+            if (fileInput.files[0]) {
+                formData.append('file', fileInput.files[0]);
+            }
+
+            try {
+                const res = await fetch(`/api/sessions/${activeSessionId}/generate`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    currentGeneratedData = data.generated_qa;
+                    renderOutputPreview();
+                    document.getElementById('downloadJsonBtn').disabled = false;
+                    updateCountBadge(data.requested_count, data.actual_count);
+                    renderEvaluation(data.deepeval);
+                    document.getElementById('approveBtn').disabled = false;
+                    await selectSession(activeSessionId);
+                } else {
+                    alert("Generation Failed: " + data.detail);
+                }
+            } catch (err) {
+                alert("Error calling endpoint: " + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-bolt"></i> Generate QA Testcases & Evaluate`;
+            }
+        }
+
+        // --- Export format handling (JSON / JSONL / QA) ---
+        // Generated items can come as a raw array, or as an object with one
+        // array-valued field (e.g. {"test_cases": [...]});  this finds that
+        // array regardless of the user's custom sample_json schema.
+        function extractItemsArray(data) {
+            if (Array.isArray(data)) return data;
+            if (data && typeof data === 'object') {
+                const arrField = Object.values(data).find(v => Array.isArray(v));
+                if (arrField) return arrField;
+            }
+            return null;
+        }
+
+        // Field names vary by schema, so match common variants rather than
+        // assuming exact keys like "question" or "ground_truth".
+        function findField(obj, candidates) {
+            if (!obj || typeof obj !== 'object') return undefined;
+            const keys = Object.keys(obj);
+            for (const candidate of candidates) {
+                const match = keys.find(k => k.toLowerCase() === candidate);
+                if (match !== undefined) return obj[match];
+            }
+            return undefined;
+        }
+
+        const QUESTION_KEYS = ['question', 'ques', 'query', 'input'];
+        const ANSWER_KEYS = ['answer', 'ground_truth', 'groundtruth', 'expected', 'expected_output', 'response'];
+        const PAGE_KEYS = ['page_no', 'page', 'pg', 'pg_no', 'source_page'];
+
+        // Builds { content, filename, mime } for the currently selected
+        // export format, from currentGeneratedData.
+        function buildExportPayload() {
+            const format = document.getElementById('exportFormatInput').value;
+            const items = extractItemsArray(currentGeneratedData);
+            const baseName = `generated_qa_${activeSessionId || 'export'}`;
+
+            if (format === 'jsonl') {
+                if (!items) {
+                    // No array found — fall back to a single-line JSON dump.
+                    return { content: JSON.stringify(currentGeneratedData), filename: `${baseName}.jsonl`, mime: 'application/jsonl' };
+                }
+                const lines = items.map(item => JSON.stringify(item)).join('\n');
+                return { content: lines, filename: `${baseName}.jsonl`, mime: 'application/jsonl' };
+            }
+
+            if (format === 'qa') {
+                // Plain text, two lines per item: "Ques: ..." then "Ans: ...",
+                // with a blank line between items. No page number — just Q/A.
+                const sourceItems = items || [currentGeneratedData];
+                const blocks = sourceItems.map(item => {
+                    const question = findField(item, QUESTION_KEYS) ?? '';
+                    const answer = findField(item, ANSWER_KEYS) ?? '';
+                    return `Question: ${question}\nAnswer: ${answer}`;
+                });
+                const content = blocks.join('\n\n');
+                return { content, filename: `${baseName}_qa.txt`, mime: 'text/plain' };
+            }
+
+            // Default: plain JSON, pretty-printed, unchanged structure.
+            return { content: JSON.stringify(currentGeneratedData, null, 2), filename: `${baseName}.json`, mime: 'application/json' };
+        }
+
+        // Refreshes the in-panel preview whenever the format dropdown changes.
+        function renderOutputPreview() {
+            const pre = document.getElementById('outputJson');
+            if (!currentGeneratedData) {
+                pre.innerText = 'No output generated yet.';
+                return;
+            }
+            const { content } = buildExportPayload();
+            pre.innerText = content;
+        }
+
+        function downloadCurrentOutput() {
+            if (!currentGeneratedData) return;
+            const { content, filename, mime } = buildExportPayload();
+            const blob = new Blob([content], { type: mime });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function openModelsModal() {
+            if (!activeSessionId) {
+                alert("Please select or create a session first.");
+                return;
+            }
+            document.getElementById('modelsModal').classList.remove('hidden');
+        }
+
+        function closeModelsModal() {
+            document.getElementById('modelsModal').classList.add('hidden');
+        }
+
+        function handleModelFormSubmit(event) {
+            event.preventDefault();
+            closeModelsModal();
+        }
+
+        async function approveGolden() {
+            if (!activeSessionId) return;
+
+            try {
+                const res = await fetch(`/api/sessions/${activeSessionId}/approve`, { method: 'POST' });
+                if (res.ok) {
+                    selectSession(activeSessionId);
+                }
+            } catch (err) {
+                alert("Failed to mark as Golden Dataset.");
+            }
+        }
+
+        function exportGoldenDataset() {
+            window.open('/api/golden-dataset/export', '_blank');
+        }
+
+        loadSessions();
+    </script>
+</body>
+</html>
