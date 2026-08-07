@@ -75,8 +75,7 @@ flowchart TD
     D1 --> F["Reciprocal Rank Fusion"]
     D2 --> F
     F --> R["Cross-encoder reranks<br/>(BAAI/bge-reranker-base)"]
-    R --> S["Cliff-detection relevance filter<br/>— keeps only what's truly relevant<br/>to THIS question"]
-    S --> L["Llama 3.3 70B (Groq)<br/>answers ONLY from kept chunks"]
+    R --> L["Llama 3.3 70B (Groq)<br/>answers ONLY from kept chunks"]
     L --> UI["Streamed answer +<br/>expandable Sources panel"]
 ```
 
@@ -108,9 +107,12 @@ return several, without ever needing a hand-tuned magic number.
 
 ```
 PhotonXRAG/
-├── app.py              # Streamlit UI — chat, styling, source display
+├── app.py              # Streamlit UI — chat, styling, source display, per-answer scores
 ├── ingest.py            # Document ingestion pipeline (run when source docs change)
 ├── rag_engine.py         # Retrieval, fusion, reranking, relevance filtering, LLM calls
+├── llm_metrics.py        # RAGAS-style scoring — one judge-LLM call, no extra deps
+├── evaluate.py           # Corpus-level evaluation runner → writes eval_summary.json
+├── eval_dataset.json     # Benchmark questions + known-correct reference answers
 ├── requirements.txt
 ├── assets/
 │   └── photonx-logo.png
@@ -159,6 +161,85 @@ files that actually changed.
 ```bash
 streamlit run app.py
 ```
+
+---
+
+## 📊 Measuring Quality
+
+Two layers, answering two different questions.
+
+### Per answer — "should I trust *this* reply?"
+
+Every reply in the chat carries its own scores, computed by one judge-LLM call
+in `llm_metrics.py` after the answer streams in. Six metrics as chips, with the
+judge's stated reasoning behind an expander. Toggle it off in the sidebar if
+Groq starts rate-limiting.
+
+No reference answer exists for a live question, so **Context Recall**,
+**Context Entity Recall** and **Answer Correctness** are the judge's estimate:
+the first two against what a complete answer would need, the last against a
+reference the judge drafts itself from the retrieved context — directional,
+not the textbook metric. The other three are reference-free by definition and
+measured as specified.
+
+### Whole system — "how good is this RAG pipeline?"
+
+Both paths run the **same** code over the same questions and produce the same
+report card. Pick whichever suits you.
+
+**From the deployed app** — expand **"How good is this RAG system overall?"** at
+the bottom of the page, set how many questions, press **Run evaluation**. It
+answers and scores each question inside the deployment, logging progress as it
+goes, then renders the report card. Roughly 20–40s per question.
+
+Results live in your browser session only, and are gone on reboot or for the
+next visitor. To make them the default everyone sees, use the
+**Download eval_summary.json** button under the report card and commit that file.
+
+**From the command line** — writes `eval_summary.json` directly, so it becomes
+the committed baseline:
+
+```bash
+python evaluate.py                   # full run → writes eval_summary.json
+python evaluate.py --limit 3         # smoke test
+python evaluate.py --sleep 3         # pause between questions (rate limits)
+python evaluate.py --no-write        # print only
+```
+
+Either way it drives the **real** pipeline over every question in
+`eval_dataset.json` and scores each answer against its known-correct reference.
+Where the run happens does not change what is measured: the same
+`rag_engine.py`, the same committed `chroma_db/`, the same models, the same Groq
+API. `eval_summary.json` is just data.
+
+Having a reference buys three things the live path cannot have:
+
+| | Per answer | Whole system |
+|---|---|---|
+| Faithfulness, Answer Relevancy, Context Precision | ✅ | ✅ |
+| Context Recall, Context Entity Recall | estimated | **measured vs reference** |
+| Answer Correctness | estimated (vs. a judge-drafted reference) | **measured vs human reference** |
+| Comparable across runs | ✗ | ✅ |
+
+That last row is the real point: rerun the same set after changing chunking,
+reranking or the prompt, and the numbers are a diff rather than an anecdote.
+
+**Extending the set** — add objects to `questions` in `eval_dataset.json`. Only
+`question` and `reference` are required. Keep references factual and terse:
+they are compared claim by claim, so editorialising invents claims the answer
+gets penalised for missing.
+
+The `out-of-scope` row is the most important one in the file. Retrieval always
+returns *something*, so that question measures whether the system declines
+instead of answering from the model's own knowledge — Answer Correctness scores
+`0.0` if it confidently answers anyway.
+
+**On cost** — each question is one retrieval pass, one answer call and one judge
+call. A full 9-question run is ~27 Groq requests and several minutes. On a free
+tier that can trip the per-minute limit; raise the pause between questions (the
+sidebar input, or `--sleep`) if you see rate-limit errors. Questions that fail
+are reported individually and excluded from the averages rather than counted as
+zero, so one rate-limited question does not read as a regression.
 
 ---
 

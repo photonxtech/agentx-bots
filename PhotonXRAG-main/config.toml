@@ -1,0 +1,11 @@
+[server]
+# Disables Streamlit's dev-mode file watcher. Without this, Streamlit
+# re-scans every installed package (including huge ones like `transformers`,
+# which has dozens of optional model architectures like zoedepth) on every
+# rerun to figure out what to hot-reload. That scan is what was showing up
+# as the zoedepth/torchvision traceback in your terminal, and it was adding
+# real latency to *every* interaction, not just startup.
+#
+# Trade-off: with this off, the app won't auto-refresh when you edit code.
+# Restart `streamlit run app.py` manually after making changes instead.
+fileWatcherType = "none"

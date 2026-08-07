@@ -1,0 +1,124 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv
+.ENV
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+*.code-workspace
+
+# DeepEval local state (config, run cache, temp test files)
+.deepeval/
+.deepeval
+.deepeval-cache.json
+.deepeval_telemetry.txt
+temp_test_run_data.json
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/cache/
+*.streamlit.cache
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+secrets.toml
+
+# API Keys & Credentials
+*.key
+*.pem
+*.p12
+*.pfx
+.aws/
+.gcp/
+
+# OS
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+logs/
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+*.swp
+.~*
+
+# Test Coverage
+htmlcov/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation
+site/
+docs/_build/
+
+# Data Files (optional - uncomment if needed)
+# *.csv
+# *.xlsx
+# *.json
+
+# Local Development
+.local/
+local_data/
+temp/
+
+# Package Management
+poetry.lock
+Pipfile.lock
+
+# Node modules (if using any frontend tools)
+node_modules/
+npm-debug.log
+yarn-error.log

@@ -18,6 +18,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -159,6 +160,80 @@ def content_hash(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Chunking (same header-aware approach used for the website content before)
 # ---------------------------------------------------------------------------
+
+# Matches a testimonial-style attribution line, e.g. "— Jane Doe, CEO, Acme
+# Inc". Deliberately only the em dash ("—"), not a plain hyphen ("-") --
+# docx_to_markdown renders bulleted list items (like Leadership Team
+# entries) with a leading "- " markdown bullet, which would otherwise
+# false-match this pattern and get mistaken for attributed quotes.
+_ATTRIBUTION_RE = re.compile(r"^—\s*.+")
+
+
+def _split_attributed_quotes(section_text: str) -> list[str] | None:
+    """
+    If a section is a run of multiple separately-attributed quotes (each
+    quote paragraph followed by its own "— Name, Title, Company" line --
+    e.g. testimonials, case-study pull-quotes, citations), splitting it
+    means each quote's *own* attribution stays paired with it, while the
+    reranker no longer sees five different people's titles crammed into
+    one chunk (which makes generic-role queries like "who's the CEO"
+    false-match against whichever unrelated quote happens to mention
+    that word most).
+
+    Returns None if this section doesn't look like a multi-quote block
+    (so callers fall back to normal chunking), otherwise a list of
+    per-quote chunk texts (heading kept on each, for context).
+    """
+    # MarkdownHeaderTextSplitter re-serializes paragraph breaks as a
+    # markdown hard-break ("  \n") rather than the blank-line ("\n\n")
+    # docx_to_markdown originally emitted, so split on any newline here
+    # (each source paragraph is already single-line) rather than assuming
+    # one specific separator style.
+    paragraphs = [p.strip().rstrip("\\") for p in section_text.split("\n") if p.strip()]
+    if not paragraphs:
+        return None
+
+    heading = paragraphs[0] if paragraphs[0].startswith("#") else None
+    body = paragraphs[1:] if heading else paragraphs
+
+    attribution_count = sum(1 for p in body if _ATTRIBUTION_RE.match(p))
+    # Only treat as a multi-quote block if there's more than one distinct
+    # attributed quote -- a single quote (or a section with just one
+    # attribution) doesn't need special handling.
+    if attribution_count < 2:
+        return None
+
+    quotes = []
+    pending = []
+    for p in body:
+        pending.append(p)
+        if _ATTRIBUTION_RE.match(p):
+            quotes.append("\n\n".join(pending))
+            pending = []
+    if pending:  # trailing quote with no attribution line -- keep it anyway
+        quotes.append("\n\n".join(pending))
+
+    if heading:
+        quotes = [f"{heading}\n\n{q}" for q in quotes]
+
+    # These chunks are external voices *about* PhotonX (testimonials,
+    # case-study pull-quotes) -- not statements from PhotonX itself. Left
+    # as bare text, a line like "— Dr. X, CEO, Other Company" reads to an
+    # embedder/reranker as a strong, clean "name + role" signal, which can
+    # outrank PhotonX's own (differently-formatted) Leadership Team chunk
+    # on queries like "who's the CEO" even though it names a client's
+    # CEO, not PhotonX's. Prepending an explicit context line resolves
+    # the ambiguity at the source, for every such query, rather than
+    # trying to out-rank the confusion after the fact.
+    quotes = [
+        "Third-party client testimonial about PhotonX (this quotes an "
+        "external client's own name/title, not a PhotonX employee):\n\n" + q
+        for q in quotes
+    ]
+
+    return quotes
+
+
 def chunk_markdown(source: str, title: str, markdown: str) -> list[dict]:
     header_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=HEADERS_TO_SPLIT_ON,
@@ -178,7 +253,10 @@ def chunk_markdown(source: str, title: str, markdown: str) -> list[dict]:
         if not section_text:
             continue
 
-        if len(section_text) <= CHUNK_SIZE * 4:
+        split_quotes = _split_attributed_quotes(section_text)
+        if split_quotes is not None:
+            pieces = split_quotes
+        elif len(section_text) <= CHUNK_SIZE * 4:
             pieces = [section_text]
         else:
             pieces = fallback_splitter.split_text(section_text)

@@ -1,0 +1,20 @@
+{
+  "osw_data.docx": {
+    "hash": "ac7bb8714c273dc899645e545e2684286c6e7ddca4139380e3729449871a27a6",
+    "title": "osw data",
+    "chunk_count": 696,
+    "last_updated": "2026-08-07 17:48:33"
+  },
+  "source_docs.docx": {
+    "hash": "2abd8eb9bf02ed21618e2798a2ce3f2d0144a81b353c6f4d9830850b03efe9ec",
+    "title": "source docs",
+    "chunk_count": 41,
+    "last_updated": "2026-07-21 17:01:02"
+  },
+  "WeNext_Platform_Documentation.docx": {
+    "hash": "38d6cd105840dbf693da6ff21afbc1657330432071a627a6ddccc42869a727f5",
+    "title": "WeNext Platform Documentation",
+    "chunk_count": 134,
+    "last_updated": "2026-08-06 11:28:08"
+  }
+}

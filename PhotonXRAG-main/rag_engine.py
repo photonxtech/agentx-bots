@@ -1,5 +1,6 @@
 """
 PhotonX RAG - Retrieval + Generation Engine
+
 Hybrid retrieval (BM25 + dense) -> Reciprocal Rank Fusion -> Cross-encoder rerank -> Groq Llama generation
 
 Import `ask()` from a Streamlit (or FastAPI, later) app to power the copilot.
@@ -24,17 +25,42 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 DB_DIR = "./chroma_db"
 COLLECTION_NAME = "photonxtech"
-
 EMBED_MODEL_NAME = "BAAI/bge-base-en-v1.5"
 RERANKER_MODEL_NAME = "BAAI/bge-reranker-base"
 
-# Set your own key: export GROQ_API_KEY=... (or put it in .streamlit/secrets.toml)
-LLM_MODEL_NAME = "llama-3.3-70b-versatile"  # Groq's free tier model with generous limits
+# Set your own key: export GROQ_API_KEY=... (or put it in .streamlit/secrets.toml).
+# ONE key covers every Groq model - keys are per account, not per model - so the
+# answer model here and the judge model in llm_metrics.py both authenticate with
+# GROQ_API_KEY. A second key is only needed to move scoring to another provider.
+#
+# THIS MODEL AND THE JUDGE MODEL MUST DIFFER - see llm_metrics.JUDGE_MODEL for
+# the full reasoning. Groq's token-per-day limit is per model, so keeping them
+# apart means evaluation cannot spend the allowance the chat needs to answer.
+#
+# openai/gpt-oss-120b replaces llama-3.3-70b-versatile, which Groq deprecated on
+# 2026-06-17. It is Groq's recommended successor - same quality tier, faster
+# inference - and carries a 200k/day free-tier token allowance against
+# llama-3.3's 100k, which roughly doubles how many questions a free key answers.
+LLM_MODEL_NAME = os.environ.get("ANSWER_MODEL", "openai/gpt-oss-120b")
+
+# gpt-oss models think before answering, and those reasoning tokens are billed
+# like any other output token. "low" is a deliberate choice rather than a
+# default: this task is grounded extraction from text already retrieved for the
+# model, which does not reward deliberation, and on a free tier the tokens saved
+# are questions answered. Raise it if answers start feeling shallow.
+ANSWER_REASONING_EFFORT = os.environ.get("ANSWER_REASONING_EFFORT", "low")
+
+
+def _reasoning_kwargs(model: str) -> dict:
+    """reasoning_effort is a gpt-oss feature; other models reject it as an
+    unknown field, so it is sent only where it is understood. Keeps
+    ANSWER_MODEL free to point back at llama-3.3 or anything else."""
+    return {"reasoning_effort": ANSWER_REASONING_EFFORT} if "gpt-oss" in model else {}
 
 DENSE_TOP_K = 20
 BM25_TOP_K = 20
-RRF_K = 60           # reciprocal rank fusion constant
-FINAL_TOP_N = 6       # hard ceiling -- upper bound on chunks sent to the LLM
+RRF_K = 60  # reciprocal rank fusion constant
+FINAL_TOP_N = 6  # hard ceiling -- upper bound on chunks sent to the LLM
 
 # We don't have a reliable way to hand-pick an absolute reranker-score
 # threshold offline (its raw logit scale isn't something we can calibrate
@@ -67,17 +93,13 @@ MAX_CHUNKS_PER_SOURCE = 2
 
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
-SYSTEM_PROMPT = """You are the PhotonX Copilot, an assistant answering questions about PhotonX
-Technologies. Answer the user's question using ONLY the context chunks provided below, pulled
-directly from PhotonX's company documents. Be direct and specific - pull real details (numbers,
-service names, project names) from the context rather than speaking generically.
+SYSTEM_PROMPT = """You are a helpful and knowledgeable assistant answering questions based on the provided context from our documents.
 
 Rules:
-- If the context does not contain the answer, say so plainly and suggest what topic area might
-  help instead. Do not make anything up.
-- Keep answers concise and conversational, like a knowledgeable team member, not a wall of text.
-- When relevant, mention which document/section the info came from in plain language (e.g. "in
-  the Services section..."), but don't dump raw filenames into the middle of sentences.
+- Synthesize the retrieved context to answer the question as best as you can.
+- If the exact answer isn't explicitly stated, try to infer it or provide the most relevant related information from the context.
+- If the context is completely unrelated to the question, you can state that the documents don't provide a clear answer, but still offer a helpful summary of the related concepts that were retrieved.
+- Keep answers conversational, direct, and helpful. Do not mention the internal mechanics of the retrieval or the file names.
 """
 
 
@@ -163,7 +185,11 @@ def _id_to_doc(res: RagResources, doc_id: str) -> tuple[str, dict]:
     return res.all_docs[idx], res.all_metadatas[idx]
 
 
-def _select_relevant(candidates: list[dict], max_n: int) -> list[dict]:
+MIN_RELEVANT = 3  # never return fewer than this many, if the pool has them --
+                  # see _select_relevant for why
+
+
+def _select_relevant(candidates: list[dict], max_n: int, min_n: int = MIN_RELEVANT) -> list[dict]:
     """
     Given candidates already sorted best-first by rerank_score, decides how
     many are actually relevant to this particular query -- 1, 2, or several,
@@ -200,6 +226,17 @@ def _select_relevant(candidates: list[dict], max_n: int) -> list[dict]:
             cutoff = i + 1
             break
 
+    # On a small corpus (tens of chunks, like this one), a single misranked
+    # top chunk -- e.g. a client testimonial that happens to share surface
+    # wording with the query -- can create an artificial cliff right after
+    # rank 1, discarding every other candidate including the one that's
+    # actually correct. min_n is a safety floor: even when a cliff is
+    # detected very early, at least min_n candidates (if the pool has that
+    # many) still reach the LLM, which can read full context and discount an
+    # irrelevant one itself -- cheap insurance on a small corpus where extra
+    # context costs little, versus the alternative of retrieval silently
+    # deciding the correct chunk doesn't exist.
+    cutoff = max(cutoff, min(min_n, len(pool)))
     return pool[:cutoff]
 
 
@@ -258,6 +295,7 @@ def generate_answer_stream(query: str, chunks: list[dict], chat_history: list[di
     client = Groq(api_key=api_key)
 
     context_block = _build_context_block(chunks)
+
     history_text = ""
     for turn in chat_history[-6:]:  # keep last few turns for follow-up context
         role = "User" if turn["role"] == "user" else "Assistant"
@@ -268,7 +306,7 @@ def generate_answer_stream(query: str, chunks: list[dict], chat_history: list[di
         {"role": "user", "content": f"""Conversation so far:
 {history_text}
 
-Context from PhotonX company documents:
+Context from the indexed company documents:
 {context_block}
 
 Current question: {query}
@@ -282,7 +320,13 @@ Answer the current question using the context above."""}
         stream=True,
         temperature=0.7,
         max_tokens=1024,
+        **_reasoning_kwargs(LLM_MODEL_NAME),
     )
+
+    # gpt-oss streams its reasoning in a separate `delta.reasoning` field rather
+    # than mixing it into `delta.content`, so reading content alone yields the
+    # answer only - no <think> block ever reaches the chat bubble. The falsy
+    # check also covers the content-less deltas sent while the model reasons.
     for chunk in response:
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
@@ -297,8 +341,8 @@ def ask(res: RagResources, query: str, chat_history: list[dict]):
     if not chunks:
         def empty_gen():
             yield (
-                "I couldn't find anything relevant to that in the PhotonX site content I've "
-                "indexed. Try rephrasing, or ask about services, projects, or the AI/Webflow work."
+                "I couldn't find anything relevant to that in the indexed documents. "
+                "Try rephrasing, or ask about services, projects, or platform features."
             )
         return [], empty_gen()
 

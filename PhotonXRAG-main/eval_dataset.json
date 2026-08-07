@@ -1,0 +1,74 @@
+{
+  "_readme": [
+    "Benchmark set for evaluate.py. Each item is one question plus the",
+    "known-correct answer, taken directly from source_docs/source_docs.docx.",
+    "",
+    "The reference is what makes corpus-level evaluation meaningful: with it,",
+    "Context Recall and Context Entity Recall are measured as RAGAS defines",
+    "them, and Answer Correctness becomes computable. Without it the judge can",
+    "only estimate. Keep references factual and terse - they are compared claim",
+    "by claim, so editorialising in a reference invents claims the answer will",
+    "be penalised for missing.",
+    "",
+    "To extend: add objects to `questions`. Every field except `question` and",
+    "`reference` is optional. `note` is ignored by the runner and is there for",
+    "whoever reads this file next. Rerun `python evaluate.py` after editing."
+  ],
+  "questions": [
+    {
+      "id": "services",
+      "question": "What services does PhotonX offer?",
+      "reference": "PhotonX offers Rapid MVP Development and market launch, AI Labs work, and Webflow development. AI Labs covers AI-Driven Marketing & Content, Custom AI Models, Workflow Automation, and AI-Powered Analytics & Reporting. Webflow work includes end-to-end Webflow development and WordPress-to-Webflow migration. They also provide UX/UI design, creative development, and an in-house QA process.",
+      "note": "Broad question spanning several Our Services subsections - tests whether retrieval pulls more than one chunk."
+    },
+    {
+      "id": "ai-work",
+      "question": "What kind of AI work has PhotonX done?",
+      "reference": "Through Photonx AI Labs, its engineering team dedicated to building AI solutions described as 'magic as a service', PhotonX works on AI-Driven Marketing & Content (hyper-personalised experiences, automated ad campaigns, AI-generated storytelling at scale), Custom AI Models for automating content and improving decision-making, Workflow Automation to eliminate manual work, and AI-Powered Analytics & Reporting that turns raw data into actionable insight. PhotonX reports 50+ AI & Webflow projects.",
+      "note": "The question from the deployed screenshot. AI Labs chunk plus the Our Impact stat."
+    },
+    {
+      "id": "engagement",
+      "question": "How does PhotonX's engagement model work?",
+      "reference": "PhotonX offers three engagement models: Managed Team, where they handle the product from concept to completion with a dedicated team; Staff Augmentation, where their experts join an existing team to supply specific skills; and Fixed Cost, an upfront price with guaranteed on-time, on-budget delivery. Pricing is tailored rather than fixed-package, generally ranging from US$5,000 to US$100,000, and can be structured hourly or per-project.",
+      "note": "Single-chunk factual question including figures - a clean Context Precision test."
+    },
+    {
+      "id": "projects",
+      "question": "What are some recent PhotonX projects?",
+      "reference": "Featured projects include Sweetooth (Flaky Bakes), a B2B bakery and confectionery manufacturer serving global QSR brands and airport lounges; My Guidance Coach by Norton | Norris, an admissions training and marketing firm, where PhotonX built pre-enrollment advising technology; and BatchX, a no-code bioinformatics analysis platform that halved analysis time and cut costs for life-sciences organisations.",
+      "note": "Entity-dense - the strongest Context Entity Recall signal in the set."
+    },
+    {
+      "id": "impact-numbers",
+      "question": "How much experience does PhotonX have, and what results have they delivered?",
+      "reference": "PhotonX has 14+ years of experience, has launched 250+ digital products, and its clients have a combined market cap of over $1 billion. It has served 7 countries, had 6 successful exits and 6 unicorn transformations, has 100+ team members, and has completed 50+ AI & Webflow projects.",
+      "note": "Pure numbers. Faithfulness fails loudly here if the model rounds or invents a figure."
+    },
+    {
+      "id": "industries",
+      "question": "Which industries does PhotonX work with?",
+      "reference": "PhotonX's Industry Solutions cover Healthcare & Life Sciences, with patient engagement platforms, telemedicine, AI-powered diagnostics, medical device UX and healthcare data analytics; and EdTech & e-Learning, with learning management systems, interactive content platforms, assessment engines, student engagement tools and analytics dashboards.",
+      "note": "Two-part list - tests whether the answer covers both industries or stops at one."
+    },
+    {
+      "id": "leadership",
+      "question": "Who leads PhotonX?",
+      "reference": "PhotonX's leadership team is Prathik Gadde (Co-founder & CEO), Chaitanya Y (Co-founder & CTO), Tushar Nadeshwar (Director of Products), Arvind Machidi (Lead Product Designer), and Ravi Chandra R (Director of Sales).",
+      "note": "Short chunk of names and titles. Any hallucinated name or swapped title shows up as an FP."
+    },
+    {
+      "id": "contact",
+      "question": "How can someone contact PhotonX?",
+      "reference": "PhotonX can be reached by email at hello@photonxtech.com. The company's registered name is Photonx Technologies Private Limited.",
+      "note": "Small, specific fact - tests retrieval on a short chunk that hybrid search can miss."
+    },
+    {
+      "id": "out-of-scope",
+      "question": "What is the capital of France?",
+      "reference": "The PhotonX documents do not contain this information, so the assistant should say it cannot answer from the indexed content rather than answering the question.",
+      "expect_refusal": true,
+      "note": "The most important row in this file. Retrieval always returns something, so this measures whether the system declines instead of answering from the model's own knowledge. Answer Correctness scores 0.0 if it confidently answers 'Paris'."
+    }
+  ]
+}
