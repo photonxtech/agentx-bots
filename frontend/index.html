@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q&A RAG Chatbot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h3>Controls</h3>
+            </div>
+
+            <button class="btn btn-primary" id="btn-new-chat">➕ New Chat</button>
+
+            <div class="sidebar-section">
+                <span class="section-title">Add Document / Image</span>
+                <div class="file-uploader" id="drop-zone">
+                    <span class="uploader-icon">📁</span>
+                    <span class="uploader-text">Drag &amp; Drop or click to upload</span>
+                    <input type="file" id="file-input" accept=".pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp,.json"
+                        style="display: none;">
+                </div>
+                <div id="file-info-container" style="display: none; margin-top: 10px;">
+                    <div id="file-name"
+                        style="font-size: 0.82rem; color: #e3e3e3; margin-bottom: 5px; word-break: break-all;"></div>
+                    <button class="btn btn-secondary" id="btn-index" style="width: 100%;">Index Document</button>
+                </div>
+                <div id="active-doc-info"
+                    style="display: none; margin-top: 10px; font-size: 0.8rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.2); padding: 8px; border-radius: 6px; color: #e3e3e3;">
+                    📄 Active: <strong id="active-doc-name" style="color: #22c55e; word-break: break-all;">None</strong>
+                </div>
+                <div id="upload-status" style="margin-top: 8px; font-size: 0.8rem;"></div>
+            </div>
+
+            <div class="sidebar-section">
+                <button class="btn btn-danger" id="btn-clear-db" style="width: 100%;">🗑️ Clear Document &amp;
+                    Cache</button>
+                <div id="clear-status" style="margin-top: 6px; font-size: 0.8rem;"></div>
+            </div>
+
+            <hr class="sidebar-divider">
+
+            <div class="sidebar-section scroll-section">
+                <span class="section-title">Recent Conversations</span>
+                <div id="recent-conversations-list">
+                    <!-- Conversations loaded dynamically -->
+                </div>
+            </div>
+
+            <!-- TOKEN USAGE DROPUP — bottom-left corner -->
+            <div class="token-dropup" id="token-dropup">
+                <div class="token-dropup-panel" id="token-panel">
+                    <div class="token-panel-header">
+                        <span id="token-provider-label">⚡ Groq · llama-3.3-70b</span>
+                        <span class="token-requests" id="token-requests">0 requests</span>
+                    </div>
+                    <div class="token-progress-track">
+                        <div class="token-progress-bar" id="token-progress-bar" style="width: 0%"></div>
+                    </div>
+                    <div class="token-stats-grid">
+                        <div class="token-stat">
+                            <span class="token-stat-label">Used</span>
+                            <span class="token-stat-value" id="token-used">0</span>
+                        </div>
+                        <div class="token-stat">
+                            <span class="token-stat-label">Remaining</span>
+                            <span class="token-stat-value" id="token-remaining">500,000</span>
+                        </div>
+                        <div class="token-stat">
+                            <span class="token-stat-label">Daily Limit</span>
+                            <span class="token-stat-value" id="token-limit">500,000</span>
+                        </div>
+                    </div>
+                    <div class="token-breakdown">
+                        <span>↑ Prompt: <b id="token-prompt">0</b></span>
+                        <span>↓ Response: <b id="token-completion">0</b></span>
+                    </div>
+                </div>
+                <button class="token-dropup-trigger" id="token-trigger" onclick="toggleTokenPanel()">
+                    🔢 <span id="token-trigger-label">Tokens: 0 used</span>
+                </button>
+            </div>
+
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="main-content">
+            <header class="main-header">
+                <span class="header-title">Q&A RAG chatbot</span>
+                <div class="header-badges">
+                    <span class="badge badge-blue" id="badge-model">groq · llama-3.3-70b</span>
+                    <span class="badge badge-green" id="badge-chunk-count">Chunks: 0</span>
+                </div>
+            </header>
+
+            <!-- LANDING PAGE VIEW -->
+            <div class="workspace-view" id="landing-view">
+                <div class="landing-container">
+                    <h2 class="landing-greeting" id="landing-greeting">Good evening, Nikhilesh</h2>
+                    <p class="landing-quote" id="landing-quote">"Focus on being productive instead of busy." — Tim
+                        Ferriss</p>
+                </div>
+
+                <div class="search-bar-container">
+                    <input type="text" id="landing-search-input"
+                        placeholder="Ask anything... (e.g. What is WeNext.ai?)">
+                    <button id="btn-submit-landing">➡️</button>
+                </div>
+            </div>
+
+            <!-- CHAT CONVERSATION VIEW -->
+            <div class="workspace-view" id="chat-view" style="display: none;">
+                <div class="chat-scroll-area" id="chat-messages">
+                    <!-- Chat bubbles loaded dynamically -->
+                </div>
+
+                <div class="bottom-chat-container">
+                    <div class="bottom-search-bar">
+                        <input type="text" id="chat-input" placeholder="Write a message...">
+                        <button id="btn-submit-chat">➡️</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/script.js?v=7"></script>
+</body>
+
+</html>
