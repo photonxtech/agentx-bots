@@ -21,7 +21,9 @@
       "Read(//tmp/**)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('answer:', d['answer'][:100]\\); print\\('metrics:', d['metrics']\\)\")",
       "Bash(curl -s -m 5 \"http://localhost:8010/qa-logs?limit=5\")",
-      "Bash(python -m py_compile config.py rag/reranker.py api/service.py scripts/run_ragas_eval.py)"
+      "Bash(python -m py_compile config.py rag/reranker.py api/service.py scripts/run_ragas_eval.py)",
+      "Bash(python -m py_compile scripts/run_langsmith_eval.py)",
+      "PowerShell(pip install langsmith)"
     ]
   }
 }

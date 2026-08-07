@@ -41,3 +41,7 @@ numpy>=1.26
 
 # --- Q&A + RAGAS metrics logging (Postgres) ---
 psycopg2-binary>=2.9
+
+# --- LangSmith tracing + offline eval (scripts/run_langsmith_eval.py) ---
+langsmith>=0.1.147
+openevals>=0.2.0   # prebuilt RAG judge prompts used by run_langsmith_eval.py

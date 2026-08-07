@@ -39,7 +39,7 @@ load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 import config
 import db
-from rag import generator
+from rag import generator, langsmith_logging
 from api import schemas
 from api.service import ChatNotFoundError, NoDocumentError, RagService, smalltalk_reply
 
@@ -285,6 +285,8 @@ def ask(chat_id: str, body: schemas.AskRequest):
 
     s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
     db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics)
+    contexts = [doc.text for doc, _ in r["hits"] if doc.text]
+    langsmith_logging.log_chat_turn(chat_id, body.question, answer_text, contexts, metrics)
 
     return {
         "chat_id": chat_id,
@@ -380,6 +382,8 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
         # Persist the assistant turn only after the full answer is produced.
         s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
         db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics)
+        contexts = [doc.text for doc, _ in r["hits"] if doc.text]
+        langsmith_logging.log_chat_turn(chat_id, body.question, answer_text, contexts, metrics)
         yield sse({"type": "done", "metrics": metrics, "sources": r["sources"]})
 
     return StreamingResponse(

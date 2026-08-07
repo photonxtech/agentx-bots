@@ -22,6 +22,17 @@ class Document:
     meta: dict = field(default_factory=dict)
 
 
+# Sentinel prefixed to a heading line so chunking.py can split on real document
+# structure (headings/titles) instead of blindly packing by character count.
+# Null bytes never occur in extracted text, so this can't collide with content.
+HEADING_MARK = "\x00H\x00"
+
+
+def mark_heading(text: str) -> str:
+    """Wrap a heading/title line so chunking.py recognizes it as a section break."""
+    return f"{HEADING_MARK}{text}"
+
+
 # --------------------------------------------------------------------------- #
 # Plain text / Markdown
 # --------------------------------------------------------------------------- #
@@ -113,6 +124,44 @@ def _safe_stem(filename: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in stem) or "pdf"
 
 
+def _extract_pdf_text_with_headings(page) -> str:
+    """Page text, with large/bold short lines marked as headings.
+
+    Uses PyMuPDF's font-size info to flag lines whose text is noticeably
+    bigger than the page's median font size (and short, like a real heading)
+    so chunking.py can split on them. Best-effort: any failure or a page with
+    no recognizable spans just falls back to the plain text layer.
+    """
+    try:
+        page_dict = page.get_text("dict")
+        sizes = [
+            span["size"]
+            for block in page_dict.get("blocks", [])
+            for line in block.get("lines", [])
+            for span in line.get("spans", [])
+            if span.get("text", "").strip()
+        ]
+        if len(sizes) < 5:
+            return page.get_text("text").strip()
+        median_size = sorted(sizes)[len(sizes) // 2]
+
+        lines_out: list[str] = []
+        for block in page_dict.get("blocks", []):
+            for line in block.get("lines", []):
+                spans = [s for s in line.get("spans", []) if s.get("text", "").strip()]
+                if not spans:
+                    continue
+                text = "".join(s["text"] for s in spans).strip()
+                max_size = max(s["size"] for s in spans)
+                if max_size >= median_size * 1.15 and len(text.split()) <= 12:
+                    lines_out.append(mark_heading(text))
+                else:
+                    lines_out.append(text)
+        return "\n".join(lines_out).strip()
+    except Exception:
+        return page.get_text("text").strip()
+
+
 def load_pdf(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Extract each PDF page as one Document, combining BOTH sources of text:
 
@@ -138,7 +187,7 @@ def load_pdf(file_bytes: bytes, filename: str, progress_callback=None) -> list[D
     for page_num, page in enumerate(pdf, 1):
         if progress_callback:
             progress_callback(page_num, total_pages, f"Parsing PDF page {page_num} of {total_pages}")
-        text = page.get_text("text").strip()
+        text = _extract_pdf_text_with_headings(page)
 
         # --- OCR + save every embedded image on this page ---
         image_texts: list[str] = []
@@ -254,8 +303,17 @@ def load_docx(file_bytes: bytes, filename: str, progress_callback=None) -> list[
     parts: list[str] = []
 
     for para in doc.paragraphs:
-        if para.text.strip():
-            parts.append(para.text.strip())
+        text = para.text.strip()
+        if not text:
+            continue
+        try:
+            style_name = para.style.name if para.style else ""
+        except Exception:
+            style_name = ""
+        if style_name.startswith(("Heading", "Title", "Subtitle")):
+            parts.append(mark_heading(text))
+        else:
+            parts.append(text)
 
     for table in doc.tables:
         for row in table.rows:
@@ -317,9 +375,15 @@ def load_pptx(file_bytes: bytes, filename: str, progress_callback=None) -> list[
         saved_paths: list[str] = []
         img_i = 0
 
+        title_shape = slide.shapes.title  # None if this slide has no title placeholder
+
         for shape in slide.shapes:
             if shape.has_text_frame and shape.text_frame.text.strip():
-                parts.append(shape.text_frame.text.strip())
+                text = shape.text_frame.text.strip()
+                if title_shape is not None and shape.shape_id == title_shape.shape_id:
+                    parts.append(mark_heading(text))
+                else:
+                    parts.append(text)
             if getattr(shape, "has_table", False) and shape.has_table:
                 for row in shape.table.rows:
                     cells = [c.text.strip() for c in row.cells if c.text.strip()]

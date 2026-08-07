@@ -56,6 +56,8 @@ from rag import embeddings
 
 logger = logging.getLogger(__name__)
 
+_client_instance: Groq | None = None
+
 
 def _client() -> Groq:
     """Groq client for judge calls, on its own API key/rate-limit bucket.
@@ -65,14 +67,21 @@ def _client() -> Groq:
     key. Set GROQ_API_KEY_RAGAS in .env to give judge calls (faithfulness x2,
     relevancy, context precision, context relevancy — up to 5 per chat turn,
     more during offline eval) a separate rate limit from answer generation.
+
+    Built once and cached — evaluate() fires several of these concurrently
+    per chat turn, and there's no reason to construct a new client per call.
     """
+    global _client_instance
+    if _client_instance is not None:
+        return _client_instance
     key = os.getenv("GROQ_API_KEY_RAGAS") or os.getenv("GROQ_API_KEY")
     if not key or key.startswith("gsk_your"):
         raise RuntimeError(
             "No Groq API key set for RAGAS evaluation. Add GROQ_API_KEY_RAGAS "
             "(or GROQ_API_KEY) to your .env file."
         )
-    return Groq(api_key=key)
+    _client_instance = Groq(api_key=key)
+    return _client_instance
 
 
 # --------------------------------------------------------------------------- #
@@ -191,6 +200,79 @@ def _int_list(values: list) -> list[int]:
     return out
 
 
+def _judge_verdicts(system: str, user: str, count: int, max_tokens: int = 500) -> list[int] | None:
+    """Ask the judge for exactly one 0/1 verdict per claim/chunk (`count` of them).
+
+    The verdict list occasionally comes back the wrong length (e.g. 20
+    verdicts for 19 claims — the judge miscounted, not a network/JSON
+    failure, so _judge_json's own retries don't cover it). This retries once
+    at the normal judge model, then escalates to RAGAS_STRICT_FALLBACK_MODEL
+    with a JSON schema that forces the array to exactly `count` items —
+    RAGAS_EVAL_MODEL doesn't support Groq's strict-schema mode (see
+    scripts/run_langsmith_eval.py), so this is the only way to guarantee the
+    count rather than hope for it. Returns None (logged) if even that fails.
+    """
+    for attempt in (1, 2):
+        resp = _judge_json(system, user, max_tokens=max_tokens)
+        if resp is None:
+            return None
+        verdicts = resp.get("verdicts")
+        if isinstance(verdicts, list) and len(verdicts) == count:
+            return _int_list(verdicts)
+        logger.warning(
+            "RAGAS verdicts: count (%s) != expected (%d) on attempt %d/2 — %s",
+            len(verdicts) if isinstance(verdicts, list) else "n/a",
+            count,
+            attempt,
+            "retrying" if attempt == 1 else "escalating to strict-schema fallback model",
+        )
+    return _judge_verdicts_strict(system, user, count, max_tokens)
+
+
+def _judge_verdicts_strict(system: str, user: str, count: int, max_tokens: int) -> list[int] | None:
+    """Last resort: force exactly `count` 0/1 verdicts via Groq's strict
+    JSON-schema structured output, on a model known to support it."""
+    try:
+        resp = _client().chat.completions.create(
+            model=config.RAGAS_STRICT_FALLBACK_MODEL,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            timeout=config.RAGAS_TIMEOUT_S,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "verdicts",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "verdicts": {
+                                "type": "array",
+                                "items": {"type": "integer", "enum": [0, 1]},
+                                "minItems": count,
+                                "maxItems": count,
+                            }
+                        },
+                        "required": ["verdicts"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        parsed = _parse_json((resp.choices[0].message.content or "").strip())
+        verdicts = parsed.get("verdicts") if isinstance(parsed, dict) else None
+        if isinstance(verdicts, list) and len(verdicts) == count:
+            return _int_list(verdicts)
+        logger.warning("RAGAS strict-schema fallback still returned the wrong verdict count: %r", parsed)
+        return None
+    except Exception:
+        logger.warning("RAGAS strict-schema fallback call failed", exc_info=True)
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # 1. Faithfulness
 # --------------------------------------------------------------------------- #
@@ -219,8 +301,9 @@ def _claim_coverage(text: str, context: str) -> float | None:
     against the context" underneath, just checking a different text.
 
     Returns 1.0 when `text` makes no factual claims (e.g. "I don't know"), and
-    None (logged) if the judge/JSON step fails or the two judge calls disagree
-    on how many claims there are.
+    None (logged) if the judge/JSON step fails, or if verdict verification
+    can't get a reliable one-verdict-per-claim count even via _judge_verdicts'
+    retry + strict-schema fallback.
     """
     try:
         claims_resp = _judge_json(_CLAIMS_SYS, f"Answer:\n{text}", max_tokens=1000)
@@ -235,18 +318,10 @@ def _claim_coverage(text: str, context: str) -> float | None:
             return 1.0  # nothing to hallucinate / nothing left uncovered
 
         numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(claims, 1))
-        verify_resp = _judge_json(_VERIFY_SYS, f"CONTEXT:\n{context}\n\nCLAIMS:\n{numbered}")
-        if verify_resp is None:
+        verdicts = _judge_verdicts(_VERIFY_SYS, f"CONTEXT:\n{context}\n\nCLAIMS:\n{numbered}", len(claims))
+        if verdicts is None:
             return None
-        verdicts = verify_resp.get("verdicts")
-        if not isinstance(verdicts, list) or len(verdicts) != len(claims):
-            logger.warning(
-                "RAGAS claim verification: verdict count (%s) != claim count (%d) — discarding",
-                len(verdicts) if isinstance(verdicts, list) else "n/a", len(claims),
-            )
-            return None
-        supported = sum(_int_list(verdicts))
-        return supported / len(claims)
+        return sum(verdicts) / len(claims)
     except Exception:
         logger.exception("RAGAS claim coverage: unexpected error")
         return None
@@ -265,9 +340,13 @@ def faithfulness(answer: str, context: str) -> float | None:
 # 2. Answer relevancy
 # --------------------------------------------------------------------------- #
 _GENQ_SYS = (
-    "Given an ANSWER, generate {n} diverse questions that the answer would be a "
-    "direct and complete response to. Do not use outside knowledge. "
-    'Respond with a JSON object of the form {{"questions": [... {n} strings ...]}}.'
+    "Given an ANSWER, first decide if it is noncommittal — a refusal, an "
+    "'I don't know' / 'I don't have that information' type response, or one "
+    "that evades the question without giving real information. "
+    "Then generate {n} diverse questions that the answer would be a direct "
+    "and complete response to. Do not use outside knowledge. "
+    'Respond with a JSON object of the form '
+    '{{"noncommittal": true/false, "questions": [... {n} strings ...]}}.'
 )
 
 
@@ -277,12 +356,19 @@ def answer_relevancy(question: str, answer: str, n: int | None = None) -> float 
     Generate `n` questions the answer would answer, embed them and the original
     question with the local model, and average the cosine similarities. Because
     embeddings are L2-normalized, a dot product IS the cosine similarity.
+
+    A noncommittal answer ("I don't know", a refusal, an evasion) can still
+    generate plausible-looking paraphrase questions and score well on pure
+    similarity, so the judge flags that case explicitly and it scores 0.0
+    regardless of similarity — matching RAGAS's own treatment of refusals.
     """
     n = n or config.RAGAS_RELEVANCY_N
     try:
         resp = _judge_json(_GENQ_SYS.format(n=n), f"ANSWER:\n{answer}")
         if resp is None:
             return None
+        if resp.get("noncommittal") is True:
+            return 0.0
         gen = resp.get("questions")
         if not isinstance(gen, list):
             logger.warning("RAGAS answer_relevancy: 'questions' missing/not a list: %r", resp)
@@ -305,37 +391,41 @@ def answer_relevancy(question: str, answer: str, n: int | None = None) -> float 
 # 3. Context precision
 # --------------------------------------------------------------------------- #
 _CTXREL_SYS = (
-    "You are given a QUESTION and a numbered list of retrieved CONTEXT chunks. "
-    "For each chunk, decide whether it is useful for answering the question. "
+    "You are given a QUESTION, the ANSWER that was generated for it, and a "
+    "numbered list of retrieved CONTEXT chunks. For each chunk, decide whether "
+    "it was useful for producing that answer. "
     'Respond with a JSON object of the form {"verdicts": [1, 0, ...]}: exactly '
     "one integer per chunk, in the same order — 1 if the chunk is relevant/useful, "
     "0 if not."
 )
 
 
-def context_precision(question: str, contexts: list[str]) -> float | None:
+def context_precision(question: str, answer: str, contexts: list[str]) -> float | None:
     """Average precision @k of the retrieved chunks (order matters).
+
+    Judged against the question AND the generated answer together — not the
+    question alone — so this reflects what was actually used to produce the
+    answer, rather than just topical overlap with the question (which would
+    make it a ranked duplicate of context_relevancy).
 
     Rewards ranking relevant chunks near the top:
         AP = sum_k (precision@k * relevant_k) / (total relevant)
-    Returns None (logged) if the judge/JSON step fails or its verdict count
-    doesn't match the number of chunks; 0.0 if nothing relevant was retrieved.
+    Returns None (logged) if the judge/JSON step fails, or if verdict
+    verification can't get a reliable one-verdict-per-chunk count even via
+    _judge_verdicts' retry + strict-schema fallback; 0.0 if nothing relevant
+    was retrieved.
     """
     if not contexts:
         return None
     try:
         numbered = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(contexts, 1))
-        resp = _judge_json(_CTXREL_SYS, f"QUESTION: {question}\n\nCONTEXT CHUNKS:\n{numbered}")
-        if resp is None:
+        rel = _judge_verdicts(
+            _CTXREL_SYS,
+            f"QUESTION: {question}\n\nANSWER:\n{answer}\n\nCONTEXT CHUNKS:\n{numbered}",
+            len(contexts),
+        )
+        if rel is None:
             return None
-        verdicts = resp.get("verdicts")
-        if not isinstance(verdicts, list) or len(verdicts) != len(contexts):
-            logger.warning(
-                "RAGAS context_precision: verdict count (%s) != chunk count (%d) — discarding",
-                len(verdicts) if isinstance(verdicts, list) else "n/a", len(contexts),
-            )
-            return None
-        rel = _int_list(verdicts)
         total_relevant = sum(rel)
         if total_relevant == 0:
             return 0.0
@@ -488,7 +578,7 @@ def evaluate(question: str, answer: str, contexts: list[str]) -> dict:
     with ThreadPoolExecutor(max_workers=4) as pool:
         faith_future = pool.submit(faithfulness, answer, context_blob)
         rel_future = pool.submit(answer_relevancy, question, answer)
-        prec_future = pool.submit(context_precision, question, contexts)
+        prec_future = pool.submit(context_precision, question, answer, contexts)
         ctx_rel_future = pool.submit(context_relevancy, question, contexts)
         faith = faith_future.result()
         rel = rel_future.result()

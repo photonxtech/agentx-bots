@@ -127,7 +127,14 @@ VISION_MAX_RETRY_WAIT = 25.0  # s; if the API says wait longer (per-day limit), 
 # Each metric is an extra Groq call (faithfulness is two), so this adds latency.
 # Set RAGAS_ENABLED = False to turn evaluation off entirely (no extra API calls).
 RAGAS_ENABLED = True
-RAGAS_EVAL_MODEL = "llama-3.1-8b-instant"   # cheap/fast model used only for judging
+# llama-3.1-8b-instant: separate TPD bucket from DEFAULT_MODEL (llama-3.3-70b-versatile),
+# so judge calls no longer compete with generation for the same daily token quota.
+# It used to be unreliable at producing valid JSON under load (frequent
+# json_validate_failed / truncated output on faithfulness and context_precision,
+# which send the largest prompts), but _judge_verdicts()'s retry + escalation to
+# RAGAS_STRICT_FALLBACK_MODEL, plus the token-budget-doubling retry in
+# _judge_json(), now absorb that instability.
+RAGAS_EVAL_MODEL = "llama-3.1-8b-instant"
 RAGAS_RELEVANCY_N = 3   # how many questions to generate from the answer for relevancy
 RAGAS_TIMEOUT_S = 15.0  # per-call timeout on the judge model; a hang must not stall a request
 # Rate-limit handling: judge calls run several-at-once (see evaluate()) and each
@@ -140,6 +147,14 @@ RAGAS_MAX_RETRY_WAIT = 65.0  # s; covers a full per-minute (TPM) reset window
 # can need more than the default max_tokens to finish its JSON reply without
 # getting cut off mid-object.
 RAGAS_MAX_TOKENS_CAP = 2000
+# Verdict-list metrics (faithfulness's claim verification, context_precision)
+# ask the judge for exactly one 0/1 verdict per claim/chunk; occasionally it
+# miscounts (e.g. 20 verdicts for 19 claims), which _judge_verdicts() retries
+# once, then escalates to this model as a last resort — it's forced to comply
+# via Groq's strict JSON-schema structured output (minItems == maxItems ==
+# the required count), which RAGAS_EVAL_MODEL does NOT support (see
+# scripts/run_langsmith_eval.py's OPENEVALS_MODEL note on the same models).
+RAGAS_STRICT_FALLBACK_MODEL = "openai/gpt-oss-120b"
 
 # --- Golden-set lookup (live chat) ---
 # context_recall/answer_correctness need a ground-truth answer, which a real

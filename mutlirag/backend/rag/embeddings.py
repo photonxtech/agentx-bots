@@ -6,20 +6,33 @@ and fast enough for a prototype. The model downloads once on first use.
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 import config
 
 _model = None
+_model_lock = threading.Lock()
 
 
 def get_model():
-    """Load the embedding model once and cache it."""
+    """Load the embedding model once and cache it.
+
+    Double-checked locking: rag.evaluation.evaluate() fires several metrics
+    concurrently in a thread pool, and on the very first request they can all
+    reach here before `_model` is set, each starting its own (slow, memory-
+    heavy) SentenceTransformer load. The lock makes only the first caller
+    actually load it; the outer unlocked check keeps every later call
+    (the common case) lock-free.
+    """
     global _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer
+        with _model_lock:
+            if _model is None:
+                from sentence_transformers import SentenceTransformer
 
-        _model = SentenceTransformer(config.EMBEDDING_MODEL)
+                _model = SentenceTransformer(config.EMBEDDING_MODEL)
     return _model
 
 
