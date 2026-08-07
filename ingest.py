@@ -1,5 +1,6 @@
 import os
 import pickle
+from pathlib import Path
 from dotenv import load_dotenv
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -11,8 +12,12 @@ from langchain_community.vectorstores import Chroma
 load_dotenv()
 
 # Paths
-PERSIST_DIR = "chroma_db"
-CHUNKS_PATH = "chunks.pkl"
+# Paths
+STORAGE_DIR = Path("storage")
+STORAGE_DIR.mkdir(exist_ok=True)
+
+PERSIST_DIR = STORAGE_DIR / "chroma_db"
+CHUNKS_PATH = STORAGE_DIR / "chunks.pkl"
 
 
 def ingest_pdf(pdf_path):
@@ -110,8 +115,7 @@ def ingest_pdf(pdf_path):
         persist_directory=PERSIST_DIR
     )
 
-    print(f"\nVector DB saved to ./{PERSIST_DIR}")
-
+    print(f"\nVector DB saved to {PERSIST_DIR}")
     print("\n========== INGESTION COMPLETE ==========\n")
 
     return vectordb

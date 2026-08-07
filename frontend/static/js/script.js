@@ -115,7 +115,7 @@ function sourcesHtml(sources, tokenUsage, answerText = "") {
         }
     }
 
-    // Don't show sources next to a fallback / "I don't know" answer —
+// Don't show sources next to a fallback / "I don't know" answer —
     // retrieval ran, but nothing it found was actually used.
     const suppressSources = isFallbackAnswer(answerText);
 
@@ -127,12 +127,8 @@ function sourcesHtml(sources, tokenUsage, answerText = "") {
 
                     let pageText = "Entire document";
 
-                    if (Array.isArray(s.pages) && s.pages.length) {
-                        const pages = [...new Set(s.pages)]
-                            .map(p => p + 1)
-                            .sort((a, b) => a - b);
-
-                        pageText = "Pages: " + pages.join(", ");
+                    if (typeof s.page === "number") {
+                        pageText = "Page: " + (s.page + 1);
                     }
 
                     return `

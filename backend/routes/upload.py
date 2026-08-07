@@ -16,7 +16,7 @@ from rag_utils import (
 
 router = APIRouter()
 
-DATA_DIR = Path("data")
+DATA_DIR = Path("storage") / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}

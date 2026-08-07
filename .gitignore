@@ -1,19 +1,33 @@
-# Environment
+# Secrets
 .env
-ragenv/
+backend/.env
+
+# Runtime data (regenerated, not source)
+backend/sessions.db
+backend/chroma_db/
+backend/chunks/
+backend/data/
+backend/flashrank_cache/
+backend/flashrank_test_cache/
+backend/uploads/
+backend/uvicorn.log
+
+# Eval tooling outputs (keep scripts, ignore generated results)
+eval/*.csv
+eval/*.json
+!eval/ground_truth_template.csv
 
 # Python
 __pycache__/
+backend/__pycache__/
 *.pyc
+ragas_env/
+backend/ragas_env/
+ragenv/
 
-# VS Code
+# Editor/OS
 .vscode/
-
-# macOS
 .DS_Store
 
-# Logs
-*.log
-uvicorn.log
-
-ragas_env/
+cache/
+cache/*

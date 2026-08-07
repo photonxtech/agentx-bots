@@ -3,8 +3,10 @@ import pickle  # converts python objects into 0/1s to store
 import uuid  # unique session ids
 import shutil  # recursively deletes session folders
 import os
+import logging
 import re  # detecting broad "summarize/explain this document/photo" style questions
 import sqlite3  # session persistence — replaces the old sessions.json flat file
+from flashrank import Ranker
 from contextlib import contextmanager
 from pathlib import Path  # sets path
 from datetime import datetime  # timestamps creation
@@ -31,12 +33,14 @@ load_dotenv()
 
 # --- Paths: everything scoped PER SESSION (per chat, which may now hold multiple PDFs) ---
 BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "data"
-CHROMA_ROOT = BASE_DIR / "chroma_db"
-CHUNKS_ROOT = BASE_DIR / "chunks"
-DB_PATH = BASE_DIR / "sessions.db"
-LEGACY_SESSIONS_FILE = BASE_DIR / "sessions.json"  # only read once, for one-time migration
+STORAGE_DIR = BASE_DIR / "storage"
 
+DATA_DIR = STORAGE_DIR / "data"
+CHROMA_ROOT = STORAGE_DIR / "chroma_db"
+CHUNKS_ROOT = STORAGE_DIR / "chunks"
+
+DB_PATH = STORAGE_DIR / "sessions.db"
+LEGACY_SESSIONS_FILE = STORAGE_DIR / "sessions.json"
 for d in (DATA_DIR, CHROMA_ROOT, CHUNKS_ROOT):
     d.mkdir(parents=True, exist_ok=True)
 
@@ -112,6 +116,9 @@ Standalone question:"""
 # so "document\b" alone silently misses "documents". This was a real bug:
 # "explain the documents" (plural) fell through to normal retrieval while
 # "explain the document" (singular) correctly used the whole-file path.
+
+logger = logging.getLogger(__name__) 
+
 _FILE_NOUN = r"(pdf|document|doc|file|photo|image|picture|pic)s?"
 
 BROAD_SUMMARY_PATTERNS = [
@@ -488,8 +495,8 @@ def process_pdf(pdf_path, session_id):
     print("PDF:", pdf_path)
     print("Pages:", len(documents)) 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=990,
-        chunk_overlap=200,
+        chunk_size=500,
+        chunk_overlap=100,
         separators=["\n\n", "\n", ". ", " ", ""]
     )
     new_chunks = splitter.split_documents(documents)
@@ -672,29 +679,46 @@ def build_hybrid_retriever(session_id):
         chunks = pickle.load(f)
 
     bm25_retriever = BM25Retriever.from_documents(chunks)
-    bm25_retriever.k = 10
+    bm25_retriever.k = 15
 
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
     persist_dir = CHROMA_ROOT / session_id
-
     vectordb = Chroma(
         persist_directory=str(persist_dir),
         embedding_function=embeddings
-    )
+)
 
-    vector_retriever = vectordb.as_retriever(
-        search_kwargs={"k": 10}
-    )
+    # Widen HNSW's search exploration so repeated identical queries return
+    # consistent results — this document has many near-tied chunks (the word
+    # "red" appears throughout), and Chroma's default search depth isn't
+    # thorough enough to reliably break those ties the same way every time.
+    try:
+        vectordb._collection.modify(metadata={"hnsw:search_ef": 200})
+    except Exception as e:
+        print(f"[build_hybrid_retriever] could not set hnsw:search_ef: {e}")
+
+    vector_retriever = vectordb.as_retriever(search_kwargs={"k": 15})
 
     ensemble_retriever = EnsembleRetriever(
         retrievers=[bm25_retriever, vector_retriever],
-        weights=[0.4, 0.6]
+        weights=[0.2, 0.8]
     )
 
-    return ensemble_retriever
+    ranker = Ranker(
+        model_name="ms-marco-MultiBERT-L-12",
+        cache_dir=str(BASE_DIR / "cache" / "flashrank_cache")
+    )
+    compressor = FlashrankRerank(client=ranker, top_n=8)
+
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor,
+        base_retriever=ensemble_retriever
+    )
+
+    return compression_retriever
 
 
 def get_full_documents_by_source(session_id):
@@ -749,6 +773,8 @@ def build_summary_context(session_id, scope="all"):
 
     parts = []
     for source, text in filtered.items():
+        if not text.strip():
+            logger.warning("Empty full-document text for source=%s session=%s", source, session_id)
         truncated = text[:per_doc_budget]
         note = "\n...[truncated — document continues beyond this excerpt]" if len(text) > per_doc_budget else ""
         parts.append(f"=== {source} ===\n{truncated}{note}")
@@ -768,6 +794,8 @@ def format_history(chat_history, max_turns=3):
     for turn in recent:
         lines.append(f"User: {turn['question']}")
         lines.append(f"Assistant: {turn['answer']}")
+
+    
     return "\n".join(lines)
 
 
@@ -809,9 +837,11 @@ def get_answer(retriever, question, chat_history, session_id=None):
     (photo vs PDF vs everything). This requires session_id — if it's not
     passed, this branch is simply skipped and the normal retrieval path runs.
     """
-    # temperature=0 for both calls: deterministic question rewriting and
-    # deterministic, factual answers
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+    # Deterministic — only for rewriting follow-ups into standalone questions
+    condense_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+
+    # Creative — used for the actual answer shown to the user
+    answer_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.8)
 
     print("Question:", question)
     print("Broad summary?", is_broad_summary_question(question))
@@ -852,14 +882,14 @@ def get_answer(retriever, question, chat_history, session_id=None):
                     "question": f"Explain this specific file: {filename}",
                     "history": history_text
                 })
-                response = llm.invoke(filled_prompt)
+                response = answer_llm.invoke(filled_prompt)
                 file_answer = parser.invoke(response)
                 usage = response.response_metadata.get("token_usage", {})
                 for k in total_tokens:
                     total_tokens[k] += usage.get(k, 0)
 
                 answer_parts.append(f"### {filename}\n{file_answer}")
-                sources.append({"source": filename, "page": "full document", "text": ""})
+                sources.append({"source": filename, "page": "full document", "text": truncated})
 
             return "\n\n".join(answer_parts), sources, total_tokens
 
@@ -873,7 +903,7 @@ def get_answer(retriever, question, chat_history, session_id=None):
             "question": question,
             "history": history_text
         })
-        response = llm.invoke(filled_prompt)
+        response = answer_llm.invoke(filled_prompt)
         answer = parser.invoke(response)
         answer_tokens = response.response_metadata.get("token_usage", {})
 
@@ -883,18 +913,44 @@ def get_answer(retriever, question, chat_history, session_id=None):
             "total_tokens": answer_tokens.get("total_tokens", 0),
         }
 
-        sources = [
-            {"source": name, "page": "full document", "text": ""}
-            for name in source_names
-        ]
+        sources = []
+
+        for name in source_names:
+            text = docs_by_source.get(name, "")
+
+            # Keep context reasonably sized
+            text = text[:10000]
+
+            sources.append({
+                "source": name,
+                "page": "full document",
+                "text": text
+            })
 
         return answer, sources, token_usage
 
     # 1. Condense (multi-turn aware retrieval)
-    standalone_question, condense_tokens = condense_question(question, chat_history, llm)
+    standalone_question, condense_tokens = condense_question(question, chat_history, condense_llm)
 
     # 2. Retrieve using the standalone question, not the raw follow-up
     docs = retriever.invoke(standalone_question)
+
+    if docs:
+        print("First doc metadata keys:", docs[0].metadata.keys())
+        print("First doc relevance_score:", docs[0].metadata.get("relevance_score"))
+
+    # De-dupe by (source, page) BEFORE slicing to top 3 — the retriever can
+    # return the same page as two separate chunks (BM25 + vector both
+    # surfacing it, or two overlapping chunks from the same page), which
+    # wastes a context slot on redundant content instead of a new page.
+    seen_pages = set()
+    deduped_docs = []
+    for d in docs:
+        key = (d.metadata.get("source"), d.metadata.get("page"))
+        if key not in seen_pages:
+            seen_pages.add(key)
+            deduped_docs.append(d)
+    docs = deduped_docs
 
     # Keep only the top 3 retrieved chunks
     docs = docs[:3]
@@ -936,7 +992,7 @@ def get_answer(retriever, question, chat_history, session_id=None):
         "question": question,
         "history": history_text
     })
-    response = llm.invoke(filled_prompt)
+    response = answer_llm.invoke(filled_prompt)
     answer = parser.invoke(response)
     answer_tokens = response.response_metadata.get("token_usage", {})
 

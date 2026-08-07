@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
-from metrics import evaluate
+from backend.metrics import evaluate
 
 from rag_utils import (
     build_hybrid_retriever,

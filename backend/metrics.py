@@ -262,6 +262,7 @@ def context_relevancy(question, contexts):
         return None
     context_blob = "\n\n".join(contexts)
     total = _sentence_count(context_blob)
+    print(f"[context_relevancy] total sentences counted: {total}", flush=True)
     if total == 0:
         return None
     try:
@@ -269,6 +270,8 @@ def context_relevancy(question, contexts):
         if resp is None:
             return None
         sentences = resp.get("relevant_sentences")
+
+        print(f"[context_relevancy] relevant sentences extracted: {sentences}", flush=True)
         if not isinstance(sentences, list):
             return None
         relevant = len([s for s in sentences if str(s).strip()])

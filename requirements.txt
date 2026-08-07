@@ -9,7 +9,6 @@ pypdf
 python-dotenv
 rank_bm25
 flashrank
-streamlit
 Pillow
 easyocr
 
@@ -17,5 +16,5 @@ easyocr
 fastapi
 uvicorn[standard]
 python-multipart
-jinja2
+
 
