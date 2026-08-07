@@ -373,6 +373,116 @@
             color: var(--text-secondary);
         }
 
+        /* RAG Metrics Panel */
+        .metrics-panel {
+            background: rgba(17, 24, 39, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .metrics-panel summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 8px 14px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            user-select: none;
+            transition: color 0.2s ease, background 0.2s ease;
+        }
+
+        .metrics-panel summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .metrics-panel summary::before {
+            content: '';
+            width: 0;
+            height: 0;
+            border-left: 5px solid var(--text-secondary);
+            border-top: 4px solid transparent;
+            border-bottom: 4px solid transparent;
+            transition: transform 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .metrics-panel[open] summary::before {
+            transform: rotate(90deg);
+        }
+
+        .metrics-panel summary:hover {
+            color: #c7d2fe;
+            background: rgba(99, 102, 241, 0.08);
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            padding: 10px 14px 12px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        @media (min-width: 600px) {
+            .metrics-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .metric-label {
+            font-size: 0.68rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            line-height: 1.2;
+        }
+
+        .metric-bar-wrap {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .metric-bar {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .metric-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.4s ease;
+        }
+
+        .metric-bar-fill.high { background: #10b981; }
+        .metric-bar-fill.mid { background: #f59e0b; }
+        .metric-bar-fill.low { background: #ef4444; }
+
+        .metric-value {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #d1d5db;
+            min-width: 32px;
+            text-align: right;
+        }
+
         /* Loading Indicator Bubble */
         .typing-loader {
             display: flex;
@@ -615,7 +725,11 @@
                         // Clear initial greeting to avoid duplication
                         chatMessages.innerHTML = '';
                         data.history.forEach(msg => {
-                            appendMessage(msg.role === 'user' ? 'user' : 'bot', msg.content);
+                            appendMessage(
+                                msg.role === 'user' ? 'user' : 'bot',
+                                msg.content,
+                                msg.metrics || null
+                            );
                         });
                     }
                 } catch (e) {
@@ -703,7 +817,7 @@
 
                 // Remove loader and append bot response
                 removeLoader(loaderId);
-                appendMessage('bot', data.reply);
+                appendMessage('bot', data.reply, data.metrics || null);
 
             } catch (error) {
                 console.error('Error sending message:', error);
@@ -857,8 +971,57 @@
             return finalHTML;
         }
 
+        const METRIC_LABELS = {
+            faithfulness: 'Faithfulness',
+            answer_relevancy: 'Answer Relevancy',
+            context_precision: 'Context Precision',
+            context_recall: 'Context Recall',
+            context_entity_recall: 'Entity Recall',
+            answer_correctness: 'Answer Correctness',
+        };
+
+        function scoreClass(value) {
+            if (value >= 0.7) return 'high';
+            if (value >= 0.4) return 'mid';
+            return 'low';
+        }
+
+        function buildMetricsPanel(metrics) {
+            const details = document.createElement('details');
+            details.className = 'metrics-panel';
+            details.open = true;
+
+            const summary = document.createElement('summary');
+            summary.innerHTML = '<span>📊</span><span>RAG Metrics</span>';
+            details.appendChild(summary);
+
+            const grid = document.createElement('div');
+            grid.className = 'metrics-grid';
+
+            Object.entries(METRIC_LABELS).forEach(([key, label]) => {
+                const value = metrics[key] ?? 0;
+                const pct = Math.round(value * 100);
+
+                const item = document.createElement('div');
+                item.className = 'metric-item';
+                item.innerHTML = `
+                    <span class="metric-label">${label}</span>
+                    <div class="metric-bar-wrap">
+                        <div class="metric-bar">
+                            <div class="metric-bar-fill ${scoreClass(value)}" style="width: ${pct}%"></div>
+                        </div>
+                        <span class="metric-value">${value.toFixed(2)}</span>
+                    </div>
+                `;
+                grid.appendChild(item);
+            });
+
+            details.appendChild(grid);
+            return details;
+        }
+
         // Helper: Append message to UI
-        function appendMessage(sender, text) {
+        function appendMessage(sender, text, metrics = null) {
             const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             
             const messageRow = document.createElement('div');
@@ -893,6 +1056,10 @@
 
             if (sender === 'bot' && citations.length > 0) {
                 container.appendChild(buildCitationsDropdown(citations));
+            }
+
+            if (sender === 'bot' && metrics) {
+                container.appendChild(buildMetricsPanel(metrics));
             }
             
             chatMessages.appendChild(messageRow);

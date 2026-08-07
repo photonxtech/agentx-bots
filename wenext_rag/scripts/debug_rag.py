@@ -36,7 +36,9 @@ def main() -> None:
         print()
 
     print("--- RESPONSE ---")
-    print(generate_rag_response(QUERY, []))
+    result = generate_rag_response(QUERY, [])
+    print(result["reply"])
+    print(f"Contexts retrieved: {len(result['contexts'])}")
     print()
 
     pdf_path = os.path.join("data", "WeNext_Meta_WhatsApp_FAQ.pdf")

@@ -2,16 +2,24 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.mypy_cache/  
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Virtual environments
 .venv/
 venv/
 env/
 ENV/
+.python-version
 
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # IDE/editor files
 .vscode/
@@ -28,6 +36,10 @@ chroma_db/
 data/
 *.sqlite3
 *.db
+*.db-journal
+*.pkl
+*.pickle
+*.parquet
 
 # Logs and temporary files
 *.log

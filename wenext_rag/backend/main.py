@@ -7,7 +7,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Import RAG functions
-from backend.rag import ingest_documents, generate_rag_response, get_rag_status
+from backend.rag import ingest_documents, generate_rag_response, get_rag_status, get_ground_truth
+from backend.metrics import run_all_metrics
 
 # In-memory storage for session histories
 # Structure: {session_id: [{"role": "user"/"assistant", "content": str}, ...]}
@@ -44,9 +45,18 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
 
+class RagMetricsResponse(BaseModel):
+    faithfulness: float
+    answer_relevancy: float
+    context_precision: float
+    context_recall: float
+    context_entity_recall: float
+    answer_correctness: float
+
 class ChatResponse(BaseModel):
     reply: str
     session_id: str
+    metrics: RagMetricsResponse | None = None
 
 @app.get("/api/status")
 async def rag_status():
@@ -74,18 +84,35 @@ async def chat_endpoint(request: ChatRequest):
     history = sessions_db[session_id]
     
     # Generate response
-    reply = generate_rag_response(user_message, history)
-    
+    rag_result = generate_rag_response(user_message, history)
+    reply = rag_result["reply"]
+    contexts = rag_result["contexts"]
+
+    metrics_result = run_all_metrics(
+        question=user_message,
+        answer=reply,
+        contexts=contexts,
+        ground_truth=get_ground_truth(user_message),
+    )
+    metrics_dict = metrics_result.to_dict()
+
     # Update conversation history in memory
-    # We append both user message and system reply to maintain context
     history.append({"role": "user", "content": user_message})
-    history.append({"role": "assistant", "content": reply})
-    
+    history.append({
+        "role": "assistant",
+        "content": reply,
+        "metrics": metrics_dict,
+    })
+
     # Keep history bounded to avoid prompt bloat (e.g., last 10 turns)
     if len(history) > 20:
         sessions_db[session_id] = history[-20:]
-        
-    return ChatResponse(reply=reply, session_id=session_id)
+
+    return ChatResponse(
+        reply=reply,
+        session_id=session_id,
+        metrics=RagMetricsResponse(**metrics_dict),
+    )
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_history(session_id: str):
