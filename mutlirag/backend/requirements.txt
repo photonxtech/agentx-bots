@@ -39,8 +39,11 @@ chromadb>=0.5.0
 # --- Utils ---
 numpy>=1.26
 
-# --- Q&A + RAGAS metrics logging (Postgres) ---
+# --- Q&A + evaluation metrics logging (Postgres) ---
 psycopg2-binary>=2.9
+
+# --- Answer evaluation judge (rag/evaluation.py) ---
+deepeval>=4.0,<5
 
 # --- LangSmith tracing + offline eval (scripts/run_langsmith_eval.py) ---
 langsmith>=0.1.147

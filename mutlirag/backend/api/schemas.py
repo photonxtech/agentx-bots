@@ -78,11 +78,20 @@ class Metrics(BaseModel):
     ttft_ms: int
     generation_ms: int
     confidence_pct: int
-    # Reference-free RAGAS scores in [0, 1]; absent/None when eval is disabled,
-    # skipped (small talk / "I don't know"), or a judge call failed.
+    # DeepEval scores in [0, 1]; absent/None when eval is disabled, skipped
+    # (small talk / "I don't know"), not attempted (context_precision/
+    # context_recall/answer_correctness need a golden-set match), or a judge
+    # call failed for that specific metric.
     faithfulness: float | None = None
     answer_relevancy: float | None = None
     context_precision: float | None = None
+    context_relevancy: float | None = None
+    context_recall: float | None = None
+    answer_correctness: float | None = None
+    # Per-metric failure reason (metric name -> short exception summary), for
+    # any metric that returned None because its judge call failed rather than
+    # because it wasn't attempted.
+    errors: dict[str, str] | None = None
 
 
 class AskResponse(BaseModel):

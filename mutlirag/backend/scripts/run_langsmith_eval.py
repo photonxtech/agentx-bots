@@ -146,8 +146,11 @@ def rag_target(inputs: dict) -> dict:
 
 # --------------------------------------------------------------------------- #
 # OLD evaluators — wrapped rag/evaluation.py's hand-written Groq judge prompts.
-# Commented out (not deleted) in favor of the openevals-based versions below.
-# Uncomment these and swap the `evaluators=[...]` list in main() to revert.
+# STALE since the DeepEval migration: rag/evaluation.py no longer exposes
+# per-metric functions (faithfulness(), answer_relevancy(), ...), only
+# evaluate()/evaluate_with_ground_truth() returning a dict. Uncommenting this
+# block as-is will raise AttributeError — kept only as a historical record of
+# what the hand-written prompts looked like, not a working revert path.
 # --------------------------------------------------------------------------- #
 # def faithfulness_evaluator(run, example):
 #     answer = run.outputs.get("answer", "")

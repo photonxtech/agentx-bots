@@ -6,6 +6,13 @@ through the code.
 
 import os
 
+# Opt out of DeepEval's anonymous usage telemetry — set before anything else
+# imports deepeval, since chat content flows through its metrics (rag/evaluation.py)
+# and this app has no business phoning that home. config.py is imported first by
+# every module that needs it, so this always wins the race against deepeval's own
+# import-time telemetry setup.
+os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "1")
+
 # Project root = the parent of backend/ (this file lives at backend/config.py).
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -116,53 +123,44 @@ VISION_MIN_INTERVAL = 2.0    # min seconds between vision calls (avoids TPM burs
 VISION_MAX_RETRIES = 4       # retries on a transient (per-minute) rate limit
 VISION_MAX_RETRY_WAIT = 25.0  # s; if the API says wait longer (per-day limit), give up instead
 
-# --- RAGAS-style answer evaluation (reference-free, computed live per answer) ---
-# After each grounded answer we score it on four RAGAS metrics — WITHOUT any
-# ground-truth labels — using a small, fast judge model:
-#   * faithfulness      — is every claim in the answer grounded in the context?
-#   * answer_relevancy  — does the answer actually address the question?
-#   * context_precision — are the *useful* retrieved chunks ranked near the top?
-#   * context_relevancy — of all retrieved text, what fraction is actually relevant
-#                        (signal-to-noise), regardless of chunk ranking?
-# Each metric is an extra Groq call (faithfulness is two), so this adds latency.
-# Set RAGAS_ENABLED = False to turn evaluation off entirely (no extra API calls).
-RAGAS_ENABLED = True
-# llama-3.1-8b-instant: separate TPD bucket from DEFAULT_MODEL (llama-3.3-70b-versatile),
-# so judge calls no longer compete with generation for the same daily token quota.
-# It used to be unreliable at producing valid JSON under load (frequent
-# json_validate_failed / truncated output on faithfulness and context_precision,
-# which send the largest prompts), but _judge_verdicts()'s retry + escalation to
-# RAGAS_STRICT_FALLBACK_MODEL, plus the token-budget-doubling retry in
-# _judge_json(), now absorb that instability.
-RAGAS_EVAL_MODEL = "llama-3.1-8b-instant"
-RAGAS_RELEVANCY_N = 3   # how many questions to generate from the answer for relevancy
-RAGAS_TIMEOUT_S = 15.0  # per-call timeout on the judge model; a hang must not stall a request
-# Rate-limit handling: judge calls run several-at-once (see evaluate()) and each
+# --- DeepEval answer evaluation (reference-free, computed live per answer) ---
+# After each grounded answer we score it on three DeepEval metrics — WITHOUT
+# any ground-truth labels — using a small, fast judge model over Groq (see
+# rag/deepeval_judge.py; DeepEval has no native Groq provider):
+#   * faithfulness         — is every claim in the answer grounded in the context?
+#   * answer_relevancy     — does the answer actually address the question?
+#   * context_relevancy    — of all retrieved text, what fraction is actually relevant
+#                           (signal-to-noise), regardless of chunk ranking?
+# Two more (context_precision, context_recall — both need a ground-truth answer,
+# per DeepEval's own required_params) plus answer_correctness (via GEval, since
+# DeepEval ships no built-in correctness metric) only run in
+# evaluate_with_ground_truth(), gated on a golden-set match — see below.
+# Each metric is an extra Groq call, so this adds latency. Set
+# DEEPEVAL_ENABLED = False to turn evaluation off entirely (no extra API calls).
+DEEPEVAL_ENABLED = True
+# Separate TPD bucket from DEFAULT_MODEL (llama-3.3-70b-versatile), so judge
+# calls no longer compete with generation for the same daily token quota.
+DEEPEVAL_JUDGE_MODEL = "llama-3.1-8b-instant"
+DEEPEVAL_TIMEOUT_S = 15.0  # per-call timeout on the judge model; a hang must not stall a request
+DEEPEVAL_METRIC_THRESHOLD = 0.7  # pass/fail cutoff DeepEval uses for metric.success
+# Rate-limit handling: metrics run several-at-once (see evaluate()) and each
 # carries the full retrieved context, so a burst can trip the judge model's TPM
 # limit. Retry transient 429s using the API's own suggested wait; give up if it
 # asks for longer than this (a real per-day quota exhaustion, not a blip).
-RAGAS_MAX_RETRIES = 4
-RAGAS_MAX_RETRY_WAIT = 65.0  # s; covers a full per-minute (TPM) reset window
-# Ceiling for the token-budget-doubling retry (see _judge_json): a long answer
-# can need more than the default max_tokens to finish its JSON reply without
-# getting cut off mid-object.
-RAGAS_MAX_TOKENS_CAP = 2000
-# Verdict-list metrics (faithfulness's claim verification, context_precision)
-# ask the judge for exactly one 0/1 verdict per claim/chunk; occasionally it
-# miscounts (e.g. 20 verdicts for 19 claims), which _judge_verdicts() retries
-# once, then escalates to this model as a last resort — it's forced to comply
-# via Groq's strict JSON-schema structured output (minItems == maxItems ==
-# the required count), which RAGAS_EVAL_MODEL does NOT support (see
-# scripts/run_langsmith_eval.py's OPENEVALS_MODEL note on the same models).
-RAGAS_STRICT_FALLBACK_MODEL = "openai/gpt-oss-120b"
+DEEPEVAL_MAX_RETRIES = 4
+DEEPEVAL_MAX_RETRY_WAIT = 65.0  # s; covers a full per-minute (TPM) reset window
+# Ceiling for the token-budget-doubling retry (see rag/deepeval_judge.py): a
+# long answer can need more than the default max_tokens to finish its JSON
+# reply without getting cut off mid-object.
+DEEPEVAL_MAX_TOKENS_CAP = 2000
 
 # --- Golden-set lookup (live chat) ---
-# context_recall/answer_correctness need a ground-truth answer, which a real
-# user's question never has. If a live question closely matches one of the
-# curated questions in GOLDEN_SET_PATH (cosine similarity via the same local
-# embedding model), RagService.evaluate_answer() reuses that row's
-# ground_truth to score those two metrics too. Anything below the threshold
-# still gets only the four reference-free metrics.
+# context_precision/context_recall/answer_correctness need a ground-truth
+# answer, which a real user's question never has. If a live question closely
+# matches one of the curated questions in GOLDEN_SET_PATH (cosine similarity
+# via the same local embedding model), RagService.evaluate_answer() reuses
+# that row's ground_truth to score those metrics too. Anything below the
+# threshold still gets only the three reference-free metrics.
 GOLDEN_SET_PATH = os.path.join(BASE_DIR, "backend", "scripts", "eval_dataset_osw.json")
 GOLDEN_SET_MATCH_THRESHOLD = 0.92
 

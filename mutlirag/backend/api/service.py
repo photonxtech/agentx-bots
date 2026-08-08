@@ -470,18 +470,18 @@ class RagService:
         )
 
     # --------------------------------------------------------------------- #
-    # Evaluation (RAGAS metrics, computed after the answer)
+    # Evaluation (DeepEval metrics, computed after the answer)
     # --------------------------------------------------------------------- #
     def evaluate_answer(self, question: str, answer: str, hits) -> dict | None:
-        """Score a produced answer on the four reference-free RAGAS metrics,
-        plus context_recall/answer_correctness when `question` closely matches
-        one of the curated golden_set questions (see rag.golden_set).
+        """Score a produced answer on the three reference-free DeepEval metrics,
+        plus context_precision/context_recall/answer_correctness when `question`
+        closely matches one of the curated golden_set questions (see rag.golden_set).
 
         Uses the FULL text of the retrieved chunks (not the truncated snippets in
         `sources`). Returns None when evaluation is disabled, there is nothing to
         score, or the answer was a refusal — never raises.
         """
-        if not config.RAGAS_ENABLED or not hits or not answer:
+        if not config.DEEPEVAL_ENABLED or not hits or not answer:
             return None
         if "don't know" in answer.lower():
             return None

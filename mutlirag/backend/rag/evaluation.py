@@ -1,614 +1,191 @@
-"""RAGAS-style answer evaluation — reference-free metrics live, ground-truth
-metrics offline.
+"""DeepEval-based answer evaluation — reference-free metrics live, ground-truth
+metrics gated on a golden-set match.
 
-Four metrics run live, after every chat answer, WITHOUT any ground-truth
+Three metrics run live, after every chat answer, WITHOUT any ground-truth
 labels — using only the question, the answer, and the retrieved context
 chunks (see `evaluate()`):
 
   * faithfulness      — fraction of the answer's claims that the context supports
                         (catches hallucination).
-  * answer_relevancy  — how well the answer addresses the question, measured by
-                        generating questions from the answer and comparing them
-                        (semantically) to the original question.
-  * context_precision — average precision of the retrieved chunks: are the ones
-                        actually relevant to the question ranked near the top?
+  * answer_relevancy  — how well the answer addresses the question.
   * context_relevancy — density of the retrieved context: of all the sentences
                         retrieved, what fraction are actually relevant to the
-                        question (vs padding/noise)? Unlike context_precision,
-                        this ignores chunk ranking and just measures signal-to-noise.
+                        question (vs padding/noise)?
 
-Two more metrics need a ground-truth (correct) answer, so they only make sense
-for OFFLINE regression testing against a curated Q&A dataset (see
-`evaluate_with_ground_truth()` and scripts/run_ragas_eval.py) — never live chat,
-since a real user's question has no known-correct answer to compare against:
+Three more metrics need a ground-truth (correct) answer, so they only run when
+`golden_set.lookup()` finds a close match for the live question, or from
+offline regression scripts against the curated Q&A dataset (see
+`evaluate_with_ground_truth()`) — never on an arbitrary live question, since a
+real user's question has no known-correct answer to compare against:
 
+  * context_precision — are the *useful* retrieved chunks ranked near the top?
+                        (DeepEval's ContextualPrecisionMetric requires
+                        expected_output, so unlike RAGAS-style implementations
+                        this can no longer run reference-free.)
   * context_recall     — did retrieval pull back everything needed to produce
                         the ground-truth answer?
   * answer_correctness — does the generated answer match the ground-truth
-                        answer, factually and semantically?
+                        answer, factually and semantically? DeepEval ships no
+                        built-in metric for this, so it's a GEval judge.
 
-These are hand-written (no LangChain / no `ragas` package) so the mechanics stay
-visible and reuse the tools the app already has: the Groq client (a small, fast
-judge model) and the local sentence-transformers embeddings.
-
-Every metric is defensive: any Groq/JSON failure yields ``None`` for that metric
-rather than raising, so evaluation can never break a chat answer. Failures are
-logged (not silent) so a metric that goes blank in the UI is diagnosable. Within
-each of `evaluate()` and `evaluate_with_ground_truth()`, metrics are independent
-of each other and run concurrently, so the extra latency is roughly one judge
-call per stage, not one per metric.
+The judge model runs over Groq via rag.deepeval_judge.GroqJudge, since DeepEval
+has no native Groq provider. Every metric is defensive: any judge/DeepEval
+failure yields ``None`` for that metric rather than raising, so evaluation can
+never break a chat answer. Failures are logged (not silent) so a metric that
+goes blank in the UI is diagnosable. Within each of `evaluate()` and
+`evaluate_with_ground_truth()`, metrics are independent of each other and run
+concurrently, so the extra latency is roughly one judge call per stage, not
+one per metric.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import re
-import time
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
-from groq import Groq
+from deepeval.metrics import (
+    AnswerRelevancyMetric,
+    ContextualPrecisionMetric,
+    ContextualRecallMetric,
+    ContextualRelevancyMetric,
+    FaithfulnessMetric,
+    GEval,
+)
+from deepeval.test_case import LLMTestCase, SingleTurnParams
 
 import config
-from rag import embeddings
+from rag.deepeval_judge import GroqJudge
 
 logger = logging.getLogger(__name__)
 
-_client_instance: Groq | None = None
+_judge_instance: GroqJudge | None = None
 
 
-def _client() -> Groq:
-    """Groq client for judge calls, on its own API key/rate-limit bucket.
+def _judge() -> GroqJudge:
+    """The Groq judge model, built once and reused across metrics/calls."""
+    global _judge_instance
+    if _judge_instance is None:
+        _judge_instance = GroqJudge(config.DEEPEVAL_JUDGE_MODEL)
+    return _judge_instance
 
-    Falls back to GROQ_API_KEY (the generation key, from rag.generator) if
-    GROQ_API_KEY_RAGAS isn't set, so this works out of the box with a single
-    key. Set GROQ_API_KEY_RAGAS in .env to give judge calls (faithfulness x2,
-    relevancy, context precision, context relevancy — up to 5 per chat turn,
-    more during offline eval) a separate rate limit from answer generation.
 
-    Built once and cached — evaluate() fires several of these concurrently
-    per chat turn, and there's no reason to construct a new client per call.
+def _metric_kwargs() -> dict:
+    """Fresh kwargs for every metric instance — build new metric objects per
+    call, never reuse one across turns, since DeepEval metrics keep the last
+    run's score/reason as instance state."""
+    return dict(
+        model=_judge(),
+        threshold=config.DEEPEVAL_METRIC_THRESHOLD,
+        include_reason=True,
+        async_mode=False,
+    )
+
+
+_CORRECTNESS_STEPS = [
+    "Classify each claim in 'actual output' as present in 'expected output', "
+    "contradicting it, or missing from it.",
+    "Penalize contradictions most, then omissions.",
+    "Judge meaning, not wording.",
+]
+
+
+def _answer_correctness_metric() -> GEval:
+    """DeepEval ships no built-in answer-correctness metric, so this is a
+    GEval judge instead — a weaker, judged tier than the native decompose-and-
+    count metrics above, per DeepEval's own guidance."""
+    return GEval(
+        name="Answer Correctness",
+        evaluation_steps=_CORRECTNESS_STEPS,
+        evaluation_params=[
+            SingleTurnParams.INPUT,
+            SingleTurnParams.ACTUAL_OUTPUT,
+            SingleTurnParams.EXPECTED_OUTPUT,
+        ],
+        model=_judge(),
+        threshold=config.DEEPEVAL_METRIC_THRESHOLD,
+        async_mode=False,
+    )
+
+
+def _score(metric, test_case: LLMTestCase) -> tuple[float | None, str | None]:
+    """Run one metric against `test_case`, returning (score, error_reason).
+
+    Never raises: one metric's judge call failing (rate limit, malformed
+    judge JSON, network error) must not take down the others — see the
+    concurrent `pool.submit` calls in evaluate()/evaluate_with_ground_truth().
+    `error_reason` is the short exception summary so a metric that goes blank
+    in the UI is diagnosable there directly, not just in server logs.
     """
-    global _client_instance
-    if _client_instance is not None:
-        return _client_instance
-    key = os.getenv("GROQ_API_KEY_RAGAS") or os.getenv("GROQ_API_KEY")
-    if not key or key.startswith("gsk_your"):
-        raise RuntimeError(
-            "No Groq API key set for RAGAS evaluation. Add GROQ_API_KEY_RAGAS "
-            "(or GROQ_API_KEY) to your .env file."
-        )
-    _client_instance = Groq(api_key=key)
-    return _client_instance
-
-
-# --------------------------------------------------------------------------- #
-# Small helpers
-# --------------------------------------------------------------------------- #
-# Parse Groq's "Please try again in 7m48.72s" / "3.5s" / "120ms" hint.
-_RETRY_AFTER_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)(ms|s)\b", re.IGNORECASE)
-
-
-def _retry_after_seconds(message: str) -> float | None:
-    m = _RETRY_AFTER_RE.search(message or "")
-    if not m:
-        return None
-    minutes = int(m.group(1)) if m.group(1) else 0
-    value = float(m.group(2))
-    seconds = value / 1000.0 if m.group(3).lower() == "ms" else value
-    return minutes * 60 + seconds
-
-
-def _judge_json(system: str, user: str, max_tokens: int = 500) -> dict | None:
-    """One deterministic call to the cheap judge model, in JSON-object mode.
-
-    Retries transient per-minute rate limits, honoring the API's suggested
-    wait (bounded by RAGAS_MAX_RETRY_WAIT so a long/per-day quota wait gives up
-    instead of stalling the whole eval run). Also retries when the judge's
-    JSON reply got cut off by max_tokens before it could close (a longer
-    answer/more chunks needs more room than the default budget) — each such
-    retry doubles the budget, capped at RAGAS_MAX_TOKENS_CAP. Returns the
-    parsed dict, or None (logged) if the call, its retries, or the JSON parse
-    ultimately failed.
-    """
-    text = None
-    current_max_tokens = max_tokens
-    for attempt in range(config.RAGAS_MAX_RETRIES + 1):
-        try:
-            resp = _client().chat.completions.create(
-                model=config.RAGAS_EVAL_MODEL,
-                temperature=0.0,
-                max_tokens=current_max_tokens,
-                timeout=config.RAGAS_TIMEOUT_S,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            )
-            text = (resp.choices[0].message.content or "").strip()
-            break
-        except Exception as e:
-            msg = str(e)
-            is_rate_limit = "429" in msg or "rate_limit" in msg.lower()
-            is_token_limit = "json_validate_failed" in msg or "max completion tokens" in msg.lower()
-            wait = _retry_after_seconds(msg)
-            if (
-                is_rate_limit
-                and attempt < config.RAGAS_MAX_RETRIES
-                and wait is not None
-                and wait <= config.RAGAS_MAX_RETRY_WAIT
-            ):
-                time.sleep(wait + 0.5)
-                continue
-            if (
-                is_token_limit
-                and attempt < config.RAGAS_MAX_RETRIES
-                and current_max_tokens < config.RAGAS_MAX_TOKENS_CAP
-            ):
-                current_max_tokens = min(current_max_tokens * 2, config.RAGAS_MAX_TOKENS_CAP)
-                continue
-            logger.warning("RAGAS judge call failed", exc_info=True)
-            return None
-
-    parsed = _parse_json(text)
-    if not isinstance(parsed, dict):
-        logger.warning("RAGAS judge returned non-JSON-object reply: %.200r", text)
-        return None
-    return parsed
-
-
-def _parse_json(text: str):
-    """Best-effort JSON extraction from a model reply (handles ```json fences).
-
-    JSON-object mode makes this a formality in the common case, but small judge
-    models occasionally still wrap the object in prose or a code fence.
-    """
-    if not text:
-        return None
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if fenced:
-        text = fenced.group(1).strip()
     try:
-        return json.loads(text)
-    except Exception:
-        pass
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            pass
-    return None
+        metric.measure(test_case)
+    except Exception as e:
+        logger.warning("DeepEval metric %s failed", type(metric).__name__, exc_info=True)
+        return None, f"{type(e).__name__}: {e}"
+    if metric.score is None:
+        return None, "judge returned no score"
+    return round(float(metric.score), 3), None
 
 
-def _round(x: float | None) -> float | None:
-    return None if x is None else round(float(x), 3)
-
-
-def _int_list(values: list) -> list[int]:
-    """Coerce judge verdicts to 0/1 ints. An unparseable entry counts as 0
-    (not supported) rather than aborting the whole metric."""
-    out = []
-    for v in values:
-        try:
-            out.append(1 if int(v) == 1 else 0)
-        except (TypeError, ValueError):
-            out.append(0)
+def _run_metrics(metrics: dict, test_case: LLMTestCase) -> dict:
+    """Run every metric concurrently; failed ones get None plus an entry in
+    the returned dict's "errors" sub-dict, keyed by metric name."""
+    with ThreadPoolExecutor(max_workers=max(len(metrics), 1)) as pool:
+        futures = {key: pool.submit(_score, metric, test_case) for key, metric in metrics.items()}
+        results = {key: future.result() for key, future in futures.items()}
+    out = {key: score for key, (score, _) in results.items()}
+    errors = {key: reason for key, (score, reason) in results.items() if score is None and reason}
+    if errors:
+        out["errors"] = errors
     return out
 
 
-def _judge_verdicts(system: str, user: str, count: int, max_tokens: int = 500) -> list[int] | None:
-    """Ask the judge for exactly one 0/1 verdict per claim/chunk (`count` of them).
-
-    The verdict list occasionally comes back the wrong length (e.g. 20
-    verdicts for 19 claims — the judge miscounted, not a network/JSON
-    failure, so _judge_json's own retries don't cover it). This retries once
-    at the normal judge model, then escalates to RAGAS_STRICT_FALLBACK_MODEL
-    with a JSON schema that forces the array to exactly `count` items —
-    RAGAS_EVAL_MODEL doesn't support Groq's strict-schema mode (see
-    scripts/run_langsmith_eval.py), so this is the only way to guarantee the
-    count rather than hope for it. Returns None (logged) if even that fails.
-    """
-    for attempt in (1, 2):
-        resp = _judge_json(system, user, max_tokens=max_tokens)
-        if resp is None:
-            return None
-        verdicts = resp.get("verdicts")
-        if isinstance(verdicts, list) and len(verdicts) == count:
-            return _int_list(verdicts)
-        logger.warning(
-            "RAGAS verdicts: count (%s) != expected (%d) on attempt %d/2 — %s",
-            len(verdicts) if isinstance(verdicts, list) else "n/a",
-            count,
-            attempt,
-            "retrying" if attempt == 1 else "escalating to strict-schema fallback model",
-        )
-    return _judge_verdicts_strict(system, user, count, max_tokens)
-
-
-def _judge_verdicts_strict(system: str, user: str, count: int, max_tokens: int) -> list[int] | None:
-    """Last resort: force exactly `count` 0/1 verdicts via Groq's strict
-    JSON-schema structured output, on a model known to support it."""
-    try:
-        resp = _client().chat.completions.create(
-            model=config.RAGAS_STRICT_FALLBACK_MODEL,
-            temperature=0.0,
-            max_tokens=max_tokens,
-            timeout=config.RAGAS_TIMEOUT_S,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "verdicts",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "verdicts": {
-                                "type": "array",
-                                "items": {"type": "integer", "enum": [0, 1]},
-                                "minItems": count,
-                                "maxItems": count,
-                            }
-                        },
-                        "required": ["verdicts"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
-        parsed = _parse_json((resp.choices[0].message.content or "").strip())
-        verdicts = parsed.get("verdicts") if isinstance(parsed, dict) else None
-        if isinstance(verdicts, list) and len(verdicts) == count:
-            return _int_list(verdicts)
-        logger.warning("RAGAS strict-schema fallback still returned the wrong verdict count: %r", parsed)
-        return None
-    except Exception:
-        logger.warning("RAGAS strict-schema fallback call failed", exc_info=True)
-        return None
-
-
-# --------------------------------------------------------------------------- #
-# 1. Faithfulness
-# --------------------------------------------------------------------------- #
-_CLAIMS_SYS = (
-    "You break an answer into a list of standalone, atomic factual claims. "
-    "Each claim must be a single, self-contained statement that can be checked "
-    "as true or false. Ignore opinions, questions, filler, and citations. "
-    'Respond with a JSON object of the form {"claims": ["Claim one.", "Claim two."]}. '
-    'If the answer contains no factual claims, respond with {"claims": []}.'
-)
-
-_VERIFY_SYS = (
-    "You are given a CONTEXT and a numbered list of CLAIMS. For each claim, decide "
-    "whether it can be directly inferred from the context. Respond with a JSON "
-    'object of the form {"verdicts": [1, 0, ...]}: exactly one integer per claim, '
-    "in the same order — 1 if the context supports the claim, 0 if it does not "
-    "or is unclear."
-)
-
-
-def _claim_coverage(text: str, context: str) -> float | None:
-    """Fraction of `text`'s atomic claims that are supported by `context`.
-
-    Shared by faithfulness (text=generated answer) and context_recall
-    (text=ground-truth answer) — both are "break into claims, then check each
-    against the context" underneath, just checking a different text.
-
-    Returns 1.0 when `text` makes no factual claims (e.g. "I don't know"), and
-    None (logged) if the judge/JSON step fails, or if verdict verification
-    can't get a reliable one-verdict-per-claim count even via _judge_verdicts'
-    retry + strict-schema fallback.
-    """
-    try:
-        claims_resp = _judge_json(_CLAIMS_SYS, f"Answer:\n{text}", max_tokens=1000)
-        if claims_resp is None:
-            return None
-        claims = claims_resp.get("claims")
-        if not isinstance(claims, list):
-            logger.warning("RAGAS claim extraction: 'claims' missing/not a list: %r", claims_resp)
-            return None
-        claims = [str(c) for c in claims if str(c).strip()]
-        if not claims:
-            return 1.0  # nothing to hallucinate / nothing left uncovered
-
-        numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(claims, 1))
-        verdicts = _judge_verdicts(_VERIFY_SYS, f"CONTEXT:\n{context}\n\nCLAIMS:\n{numbered}", len(claims))
-        if verdicts is None:
-            return None
-        return sum(verdicts) / len(claims)
-    except Exception:
-        logger.exception("RAGAS claim coverage: unexpected error")
-        return None
-
-
-def faithfulness(answer: str, context: str) -> float | None:
-    """Fraction of the answer's atomic claims that are supported by the context.
-
-    Reference-free: checks the *generated* answer against the retrieved
-    context, so it can run live on every chat turn (see `evaluate()`).
-    """
-    return _claim_coverage(answer, context)
-
-
-# --------------------------------------------------------------------------- #
-# 2. Answer relevancy
-# --------------------------------------------------------------------------- #
-_GENQ_SYS = (
-    "Given an ANSWER, first decide if it is noncommittal — a refusal, an "
-    "'I don't know' / 'I don't have that information' type response, or one "
-    "that evades the question without giving real information. "
-    "Then generate {n} diverse questions that the answer would be a direct "
-    "and complete response to. Do not use outside knowledge. "
-    'Respond with a JSON object of the form '
-    '{{"noncommittal": true/false, "questions": [... {n} strings ...]}}.'
-)
-
-
-def answer_relevancy(question: str, answer: str, n: int | None = None) -> float | None:
-    """How well the answer addresses the question.
-
-    Generate `n` questions the answer would answer, embed them and the original
-    question with the local model, and average the cosine similarities. Because
-    embeddings are L2-normalized, a dot product IS the cosine similarity.
-
-    A noncommittal answer ("I don't know", a refusal, an evasion) can still
-    generate plausible-looking paraphrase questions and score well on pure
-    similarity, so the judge flags that case explicitly and it scores 0.0
-    regardless of similarity — matching RAGAS's own treatment of refusals.
-    """
-    n = n or config.RAGAS_RELEVANCY_N
-    try:
-        resp = _judge_json(_GENQ_SYS.format(n=n), f"ANSWER:\n{answer}")
-        if resp is None:
-            return None
-        if resp.get("noncommittal") is True:
-            return 0.0
-        gen = resp.get("questions")
-        if not isinstance(gen, list):
-            logger.warning("RAGAS answer_relevancy: 'questions' missing/not a list: %r", resp)
-            return None
-        gen_qs = [str(q) for q in gen if str(q).strip()]
-        if not gen_qs:
-            return None
-
-        vecs = embeddings.embed([question] + gen_qs)  # (1 + m, dim), normalized
-        q_vec, gen_vecs = vecs[0], vecs[1:]
-        sims = gen_vecs @ q_vec  # cosine similarity per generated question
-        # Clamp to [0, 1]: negatives mean "unrelated", not "anti-relevant".
-        return float(np.clip(sims, 0.0, 1.0).mean())
-    except Exception:
-        logger.exception("RAGAS answer_relevancy: unexpected error")
-        return None
-
-
-# --------------------------------------------------------------------------- #
-# 3. Context precision
-# --------------------------------------------------------------------------- #
-_CTXREL_SYS = (
-    "You are given a QUESTION, the ANSWER that was generated for it, and a "
-    "numbered list of retrieved CONTEXT chunks. For each chunk, decide whether "
-    "it was useful for producing that answer. "
-    'Respond with a JSON object of the form {"verdicts": [1, 0, ...]}: exactly '
-    "one integer per chunk, in the same order — 1 if the chunk is relevant/useful, "
-    "0 if not."
-)
-
-
-def context_precision(question: str, answer: str, contexts: list[str]) -> float | None:
-    """Average precision @k of the retrieved chunks (order matters).
-
-    Judged against the question AND the generated answer together — not the
-    question alone — so this reflects what was actually used to produce the
-    answer, rather than just topical overlap with the question (which would
-    make it a ranked duplicate of context_relevancy).
-
-    Rewards ranking relevant chunks near the top:
-        AP = sum_k (precision@k * relevant_k) / (total relevant)
-    Returns None (logged) if the judge/JSON step fails, or if verdict
-    verification can't get a reliable one-verdict-per-chunk count even via
-    _judge_verdicts' retry + strict-schema fallback; 0.0 if nothing relevant
-    was retrieved.
-    """
-    if not contexts:
-        return None
-    try:
-        numbered = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(contexts, 1))
-        rel = _judge_verdicts(
-            _CTXREL_SYS,
-            f"QUESTION: {question}\n\nANSWER:\n{answer}\n\nCONTEXT CHUNKS:\n{numbered}",
-            len(contexts),
-        )
-        if rel is None:
-            return None
-        total_relevant = sum(rel)
-        if total_relevant == 0:
-            return 0.0
-
-        hits = 0
-        precision_sum = 0.0
-        for k, r in enumerate(rel, 1):
-            if r:
-                hits += 1
-                precision_sum += hits / k
-        return precision_sum / total_relevant
-    except Exception:
-        logger.exception("RAGAS context_precision: unexpected error")
-        return None
-
-
-# --------------------------------------------------------------------------- #
-# 4. Context relevancy
-# --------------------------------------------------------------------------- #
-_CTXREV_SYS = (
-    "You are given a QUESTION and a CONTEXT passage made up of several chunks. "
-    "Extract ONLY the sentences from the context that are directly relevant to "
-    "answering the question, copied verbatim (do not paraphrase). "
-    'Respond with a JSON object of the form {"relevant_sentences": ["sentence one.", ...]}. '
-    'If no sentences are relevant, respond with {"relevant_sentences": []}.'
-)
-
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def _sentence_count(text: str) -> int:
-    return len([s for s in _SENTENCE_SPLIT_RE.split(text.strip()) if s.strip()])
-
-
-def context_relevancy(question: str, contexts: list[str]) -> float | None:
-    """Fraction of the retrieved context that is actually relevant to the question.
-
-    Unlike context_precision (which rewards ranking relevant chunks near the
-    top), this measures density: of every sentence across the retrieved chunks,
-    how many does the judge consider relevant vs noise/padding? The judge
-    extracts relevant sentences verbatim; score = (extracted count) / (total
-    sentence count). Returns None (logged) if the judge/JSON step fails.
-    """
-    if not contexts:
-        return None
-    context_blob = "\n\n".join(contexts)
-    total = _sentence_count(context_blob)
-    if total == 0:
-        return None
-    try:
-        resp = _judge_json(
-            _CTXREV_SYS, f"QUESTION: {question}\n\nCONTEXT:\n{context_blob}", max_tokens=800
-        )
-        if resp is None:
-            return None
-        sentences = resp.get("relevant_sentences")
-        if not isinstance(sentences, list):
-            logger.warning(
-                "RAGAS context_relevancy: 'relevant_sentences' missing/not a list: %r", resp
-            )
-            return None
-        relevant = len([s for s in sentences if str(s).strip()])
-        return min(1.0, relevant / total)
-    except Exception:
-        logger.exception("RAGAS context_relevancy: unexpected error")
-        return None
-
-
-# --------------------------------------------------------------------------- #
-# 5. Context recall (needs ground truth — offline eval only)
-# --------------------------------------------------------------------------- #
-def context_recall(ground_truth: str, contexts: list[str]) -> float | None:
-    """Fraction of the ground-truth answer's claims that the retrieved context supports.
-
-    Same claim-then-verify mechanics as faithfulness, but checks the *reference*
-    (correct) answer against the context instead of the generated one — this
-    measures whether retrieval pulled back everything needed to answer
-    correctly, independent of what the generator actually said. Needs a
-    ground-truth answer, so unlike the four metrics above this only makes
-    sense for offline regression testing against a curated Q&A set, not live
-    chat (see `evaluate_with_ground_truth()`).
-    """
-    if not ground_truth or not ground_truth.strip() or not contexts:
-        return None
-    context_blob = "\n\n".join(contexts)
-    return _claim_coverage(ground_truth, context_blob)
-
-
-# --------------------------------------------------------------------------- #
-# 6. Answer correctness (needs ground truth — offline eval only)
-# --------------------------------------------------------------------------- #
-_CORRECTNESS_SYS = (
-    "You compare a candidate ANSWER to a GROUND TRUTH reference answer for the "
-    "same question. Judge them at the level of individual factual statements. "
-    'Respond with a JSON object of the form {"tp": <int>, "fp": <int>, "fn": <int>}:\n'
-    "tp = number of statements in the ANSWER that are also supported by the GROUND TRUTH.\n"
-    "fp = number of statements in the ANSWER that are NOT supported by the GROUND TRUTH "
-    "(wrong, invented, or contradicting it).\n"
-    "fn = number of statements in the GROUND TRUTH that are missing from the ANSWER.\n"
-    "If both texts are empty or contain no checkable statements, respond with "
-    '{"tp": 0, "fp": 0, "fn": 0}.'
-)
-
-
-def answer_correctness(answer: str, ground_truth: str) -> float | None:
-    """How well the answer matches a ground-truth reference answer.
-
-    Combines a factual-overlap F1 (TP/FP/FN statement classification by the
-    judge LLM) with embedding cosine similarity between the two texts, weighted
-    0.75/0.25 — RAGAS's default weighting, favoring factual overlap over loose
-    semantic similarity. Needs a ground-truth answer, so this is for offline
-    regression testing only (see `evaluate_with_ground_truth()`), never live
-    chat. Returns None (logged) on judge/JSON failure.
-    """
-    if not answer or not answer.strip() or not ground_truth or not ground_truth.strip():
-        return None
-    try:
-        resp = _judge_json(_CORRECTNESS_SYS, f"GROUND TRUTH:\n{ground_truth}\n\nANSWER:\n{answer}")
-        if resp is None:
-            return None
-        try:
-            tp, fp, fn = int(resp["tp"]), int(resp["fp"]), int(resp["fn"])
-        except (KeyError, TypeError, ValueError):
-            logger.warning("RAGAS answer_correctness: bad tp/fp/fn in judge reply: %r", resp)
-            return None
-        f1 = 1.0 if tp + fp + fn == 0 else tp / (tp + 0.5 * (fp + fn))
-
-        vecs = embeddings.embed([answer, ground_truth])
-        semantic_sim = float(np.clip(vecs[0] @ vecs[1], 0.0, 1.0))
-
-        return 0.75 * f1 + 0.25 * semantic_sim
-    except Exception:
-        logger.exception("RAGAS answer_correctness: unexpected error")
-        return None
-
-
-# --------------------------------------------------------------------------- #
-# Public entry point
-# --------------------------------------------------------------------------- #
 def evaluate(question: str, answer: str, contexts: list[str]) -> dict:
-    """Score one answer on the four reference-free RAGAS metrics.
+    """Score one answer on the three reference-free DeepEval metrics.
 
     `contexts` are the full text of the retrieved chunks (best relevance first).
-    The four metrics don't depend on each other, so they run concurrently —
-    wall-clock cost is roughly one judge call, not five sequential ones.
+    The three metrics don't depend on each other, so they run concurrently —
+    wall-clock cost is roughly one judge call, not three sequential ones.
     Returns a dict of floats in [0, 1] (rounded), with None for any metric whose
     judge call failed. Never raises.
     """
-    context_blob = "\n\n".join(contexts)
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        faith_future = pool.submit(faithfulness, answer, context_blob)
-        rel_future = pool.submit(answer_relevancy, question, answer)
-        prec_future = pool.submit(context_precision, question, answer, contexts)
-        ctx_rel_future = pool.submit(context_relevancy, question, contexts)
-        faith = faith_future.result()
-        rel = rel_future.result()
-        prec = prec_future.result()
-        ctx_rel = ctx_rel_future.result()
-    return {
-        "faithfulness": _round(faith),
-        "answer_relevancy": _round(rel),
-        "context_precision": _round(prec),
-        "context_relevancy": _round(ctx_rel),
+    test_case = LLMTestCase(input=question, actual_output=answer, retrieval_context=contexts)
+    metrics = {
+        "faithfulness": FaithfulnessMetric(**_metric_kwargs()),
+        "answer_relevancy": AnswerRelevancyMetric(**_metric_kwargs()),
+        "context_relevancy": ContextualRelevancyMetric(**_metric_kwargs()),
     }
+    return _run_metrics(metrics, test_case)
 
 
 def evaluate_with_ground_truth(
     question: str, answer: str, ground_truth: str, contexts: list[str]
 ) -> dict:
-    """Score one answer on all six RAGAS metrics, using a curated ground truth.
+    """Score one answer on all six metrics, using a curated ground truth.
 
-    Adds context_recall and answer_correctness (both need `ground_truth`) on
-    top of the four reference-free metrics from `evaluate()`. This is for
-    OFFLINE regression testing against a hand-written Q&A dataset — never call
-    this from the live chat path, since a real user's question has no
-    ground-truth answer to compare against. See scripts/run_ragas_eval.py.
+    Adds context_precision, context_recall, and answer_correctness (all need
+    `ground_truth`) on top of the three reference-free metrics from
+    `evaluate()`. This is for OFFLINE regression testing / golden-set-matched
+    live questions against a hand-written Q&A dataset — never call this with
+    a ground truth improvised for the occasion, since a reference derived from
+    the same contexts it's checked against trivially scores 1.00 forever.
     """
     base = evaluate(question, answer, contexts)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        recall_future = pool.submit(context_recall, ground_truth, contexts)
-        correctness_future = pool.submit(answer_correctness, answer, ground_truth)
-        recall = recall_future.result()
-        correctness = correctness_future.result()
-    base["context_recall"] = _round(recall)
-    base["answer_correctness"] = _round(correctness)
+    test_case = LLMTestCase(
+        input=question,
+        actual_output=answer,
+        expected_output=ground_truth,
+        retrieval_context=contexts,
+    )
+    metrics = {
+        "context_precision": ContextualPrecisionMetric(**_metric_kwargs()),
+        "context_recall": ContextualRecallMetric(**_metric_kwargs()),
+        "answer_correctness": _answer_correctness_metric(),
+    }
+    extra = _run_metrics(metrics, test_case)
+    # Both evaluate() and this call can independently produce an "errors"
+    # sub-dict — merge them instead of letting the second clobber the first.
+    merged_errors = {**base.pop("errors", {}), **extra.pop("errors", {})}
+    base.update(extra)
+    if merged_errors:
+        base["errors"] = merged_errors
     return base

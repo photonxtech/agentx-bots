@@ -310,20 +310,23 @@ function renderMessages() {
 // Build a RAGAS score line from a metrics object, or null if no scores present.
 // Each score is 0..1; color-coded green/amber/red by quality thresholds.
 function renderRagas(mt) {
+  const errors = mt.errors || {};
   const defs = [
-    ["Faithfulness", mt.faithfulness],
-    ["Answer relevancy", mt.answer_relevancy],
-    ["Context precision", mt.context_precision],
-    ["Context relevancy", mt.context_relevancy],
-    ["Context recall", mt.context_recall],
-    ["Answer correctness", mt.answer_correctness],
-  ].filter(([, v]) => v !== null && v !== undefined);
+    ["Faithfulness", "faithfulness", mt.faithfulness],
+    ["Answer relevancy", "answer_relevancy", mt.answer_relevancy],
+    ["Context precision", "context_precision", mt.context_precision],
+    ["Context relevancy", "context_relevancy", mt.context_relevancy],
+    ["Context recall", "context_recall", mt.context_recall],
+    ["Answer correctness", "answer_correctness", mt.answer_correctness],
+  ].filter(([, key, v]) => (v !== null && v !== undefined) || errors[key]);
   if (!defs.length) return null;
   const cls = v => (v >= 0.7 ? "g" : v >= 0.4 ? "y" : "r");
   const d = document.createElement("div");
   d.className = "ragas";
   d.innerHTML = "📊 " + defs
-    .map(([label, v]) => `<span class="score">${label}: <b class="${cls(v)}">${(v * 100).toFixed(0)}%</b></span>`)
+    .map(([label, key, v]) => errors[key]
+      ? `<span class="score" title="${escapeHtml(errors[key])}">${label}: <b class="r">⚠ failed</b></span>`
+      : `<span class="score">${label}: <b class="${cls(v)}">${(v * 100).toFixed(0)}%</b></span>`)
     .join("");
   return d;
 }
