@@ -61,6 +61,20 @@ logger = logging.getLogger(__name__)
 _judge_instance: GroqJudge | None = None
 
 
+def _judge_contexts(contexts: list[str]) -> list[str]:
+    """Cap context volume fed to the judge, independent of TOP_K.
+
+    Contextual metrics (faithfulness, context_relevancy, context_precision,
+    context_recall) reason over every chunk in one judge call. A large
+    document at TOP_K=10 full-size chunks can exceed DEEPEVAL_JUDGE_MODEL's
+    per-minute token ceiling, or make a small judge model lose track of the
+    required JSON output shape. Truncating here only affects evaluation
+    quality, not the answer itself (the generator still sees all TOP_K chunks).
+    """
+    capped = contexts[: config.DEEPEVAL_MAX_CONTEXT_CHUNKS]
+    return [c[: config.DEEPEVAL_MAX_CHUNK_CHARS] for c in capped]
+
+
 def _judge() -> GroqJudge:
     """The Groq judge model, built once and reused across metrics/calls."""
     global _judge_instance
@@ -148,6 +162,7 @@ def evaluate(question: str, answer: str, contexts: list[str]) -> dict:
     Returns a dict of floats in [0, 1] (rounded), with None for any metric whose
     judge call failed. Never raises.
     """
+    contexts = _judge_contexts(contexts)
     test_case = LLMTestCase(input=question, actual_output=answer, retrieval_context=contexts)
     metrics = {
         "faithfulness": FaithfulnessMetric(**_metric_kwargs()),
@@ -170,6 +185,7 @@ def evaluate_with_ground_truth(
     the same contexts it's checked against trivially scores 1.00 forever.
     """
     base = evaluate(question, answer, contexts)
+    contexts = _judge_contexts(contexts)
     test_case = LLMTestCase(
         input=question,
         actual_output=answer,

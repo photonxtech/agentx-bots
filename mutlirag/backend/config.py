@@ -153,6 +153,14 @@ DEEPEVAL_MAX_RETRY_WAIT = 65.0  # s; covers a full per-minute (TPM) reset window
 # long answer can need more than the default max_tokens to finish its JSON
 # reply without getting cut off mid-object.
 DEEPEVAL_MAX_TOKENS_CAP = 2000
+# Contextual metrics (faithfulness, context_relevancy, context_precision,
+# context_recall) feed the judge every retrieved chunk at once. TOP_K=10 full
+# chunks from a large document can push a single judge call's prompt past
+# DEEPEVAL_JUDGE_MODEL's per-minute token ceiling, or make the small model
+# lose track of the required JSON shape entirely. Cap what the judge (not the
+# generator) sees, independent of TOP_K.
+DEEPEVAL_MAX_CONTEXT_CHUNKS = 5   # at most this many retrieved chunks per judge call
+DEEPEVAL_MAX_CHUNK_CHARS = 500    # each chunk truncated to this many chars first
 
 # --- Golden-set lookup (live chat) ---
 # context_precision/context_recall/answer_correctness need a ground-truth
