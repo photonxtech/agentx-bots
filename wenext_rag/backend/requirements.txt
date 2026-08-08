@@ -1,0 +1,9 @@
+python-docx
+chromadb
+sentence-transformers
+openai
+httpx
+fastapi
+uvicorn[standard]
+pydantic
+deepeval

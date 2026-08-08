@@ -1,0 +1,227 @@
+{
+  "generated_at": "2026-08-08T10:28:42",
+  "generation_model": "llama3.1:8b",
+  "judge_model": "llama3.1:8b",
+  "results": [
+    {
+      "module": "9.1 WhatsApp AI Agent",
+      "question": "How does the WhatsApp AI agent decide what to say to customers?",
+      "answer": "The WhatsApp AI Agent decides what to say to customers based on the knowledge and business context that you have uploaded, such as your website and documents. It uses this information to answer FAQs, search your product catalog, and even take orders.\n\nThis is related to the following modules:\n\n* WhatsApp AI Agent (9.1)\n* Organisation AI Knowledge (recommended)",
+      "model": "llama3.1:8b",
+      "metrics": {
+        "Answer Relevancy": {
+          "score": 1.0,
+          "success": true,
+          "reason": "The score is 1.00 because all relevant information was provided, directly addressing the question about how the WhatsApp AI agent decides what to say to customers.",
+          "error": null
+        },
+        "Faithfulness": {
+          "score": 1.0,
+          "success": true,
+          "reason": "The score is 1.00 because there are no contradictions found between the actual output and the retrieval context.",
+          "error": null
+        },
+        "Contextual Precision": {
+          "score": 1.0,
+          "success": true,
+          "reason": "The score is 1.00 because all relevant nodes ('It clearly addresses the question by stating what the WhatsApp AI Agent does, including answering FAQs and taking orders.', 'The text verifies that the WhatsApp AI Agent is a 24/7 AI assistant, which matches the expected output.') are ranked higher than irrelevant nodes (2nd node: 'This document does not provide any relevant information about how the WhatsApp AI Agent decides what to say to customers.' and 3rd node: 'The text describes a specific feature of the WhatsApp AI Agent, but it is not directly related to how it decides what to say to customers.') in the retrieval contexts.",
+          "error": null
+        },
+        "Contextual Recall": {
+          "score": 0.5,
+          "success": true,
+          "reason": "The score is 0.50 because the first two sentences are well-matched to the node(s) in retrieval context, but the last three sentences have partial matches with multiple nodes.",
+          "error": null
+        },
+        "Contextual Relevancy": {
+          "score": 0.5185185185185185,
+          "success": true,
+          "reason": "The score is 0.52 because none of the relevant statements in the retrieval context mention anything about how the AI agent decides what to say to customers, instead they focus on setting up and using the WhatsApp AI Agent for FAQs, searching product catalogs, taking orders, and suggesting reply options.",
+          "error": null
+        },
+        "Hallucination": {
+          "score": 0.6666666666666666,
+          "success": false,
+          "reason": "The score is 0.67 because there are contradictions between the actual output and context (e.g., missing features and requirements), indicating some level of hallucination.",
+          "error": null
+        }
+      }
+    },
+    {
+      "module": "1.2 Nexus AI",
+      "question": "What is Nexus AI and what can it do?",
+      "answer": "Nexus AI (also branded as \"PhotonX Nexus AI\" or \"Aria\") is a full-page AI assistant that can run your whole workspace by chat. It connects to ~230 platform actions across 30 areas of the app, allowing you to ask it to perform various tasks.\n\nYou can use Nexus AI to:\n\n* Pull reports\n* Draft and send messages\n* Launch campaigns\n* Manage contacts and leads\n* Publish social posts\n* Create ads\n* And many more actions (see \"What it does\" in the context excerpt)\n\nNexus AI is a workspace assistant, not a general chatbot, and only works with your own business data. It streams its answer and shows a \"tool card\" for every action it takes.\n\n**Module:** Assistants & Search > 1.2 Nexus AI — the full-page AI workspace",
+      "model": "llama3.1:8b",
+      "metrics": {
+        "Answer Relevancy": {
+          "score": 0.8181818181818182,
+          "success": true,
+          "reason": "The score is 0.82 because there are two irrelevant statements that prevent the score from being higher, including a general statement and a contradictory statement.",
+          "error": null
+        },
+        "Faithfulness": {
+          "score": 0.8333333333333334,
+          "success": true,
+          "reason": "The score is 0.83 because the actual output inaccurately brands Nexus AI as PhotonX Nexus AI or Aria and misclassifies it as a general chatbot, despite the text stating it's a workspace assistant.",
+          "error": null
+        },
+        "Contextual Precision": {
+          "score": 1.0,
+          "success": true,
+          "reason": "The score is 1.00 because all relevant nodes (\"The first document clearly addresses the question by stating what Nexus AI can do...\", ranked #1) are ranked higher than irrelevant nodes (\"The second document is a table of contents for how the AI is built...\", ranked #2, \"The third document lists the components used to build Nexus AI...\", ranked #3, and \"The fourth document provides a list of requirements for using Nexus AI...\", ranked #4).",
+          "error": null
+        },
+        "Contextual Recall": {
+          "score": null,
+          "success": false,
+          "reason": null,
+          "error": "Evaluation LLM outputted an invalid JSON. Please use a better evaluation model."
+        },
+        "Contextual Relevancy": {
+          "score": 0.3142857142857143,
+          "success": false,
+          "reason": "The score is 0.31 because the retrieval context contains irrelevant information such as 'it only works with your own business data', 'Confirmation gates', and 'customer phone numbers and emails' that have nothing to do with what Nexus AI can do in general, while relevant statements like 'A full-page AI assistant that can actually run your whole workspace by chat.' and 'It isn't just a chatbot that talks — it connects to ~230 platform actions across 30 areas of the app...' provide some context about its capabilities.",
+          "error": null
+        },
+        "Hallucination": {
+          "score": 0.3333333333333333,
+          "success": true,
+          "reason": "The score is 0.33 because there are factual alignments (2) and contradictions (1), indicating some level of hallucination.",
+          "error": null
+        }
+      }
+    },
+    {
+      "module": "2.1 AI reply suggestions",
+      "question": "How do AI reply suggestions work in the WhatsApp inbox?",
+      "answer": "According to [2. Inbox & Conversations > 2.1 AI reply suggestions — WhatsApp inbox], for any customer chat, the AI suggests 3 ready-to-send reply options (each with a tone) so agents can reply faster.\n\nTo use this feature, open a conversation in the Inbox, tap the AI-suggestions action, pick a reply, edit if needed, and send. This module relates to **Inbox & Conversations**.",
+      "model": "llama3.1:8b",
+      "metrics": {
+        "Answer Relevancy": {
+          "score": 0.7142857142857143,
+          "success": true,
+          "reason": "The score is 0.71 because there are two irrelevant statements made in the actual output that prevent it from being higher.",
+          "error": null
+        },
+        "Faithfulness": {
+          "score": 0.6666666666666666,
+          "success": true,
+          "reason": "The score is 0.67 because the actual output deviates from the retrieval context by mentioning a specific feature's location, which isn't supported in the provided information.",
+          "error": null
+        },
+        "Contextual Precision": {
+          "score": 1.0,
+          "success": true,
+          "reason": "The score is 1.00 because all relevant nodes ('yes' verdicts) are ranked higher than irrelevant nodes ('no' verdicts). The first document clearly addresses the question, while the second and third documents describe unrelated features.",
+          "error": null
+        },
+        "Contextual Recall": {
+          "score": 0.21739130434782608,
+          "success": false,
+          "reason": "The score is 0.22 because the expected output accurately describes how to use the feature (sentence 2) and what it does (sentences 1 and 3), but incorrectly attributes requirements for using the feature (sentence 4) and mentions unrelated features (sentences 5-17). The node in retrieval context that supports sentence 2 is 'How to use: Open a conversation in the Inbox → tap the AI-suggestions action → pick a reply, edit if needed, send.'",
+          "error": null
+        },
+        "Contextual Relevancy": {
+          "score": 0.1875,
+          "success": false,
+          "reason": "The score is 0.19 because none of the relevant statements mention how AI reply suggestions work in the WhatsApp inbox, and most statements are about setting up or using automations, which doesn't directly relate to the input question.",
+          "error": null
+        },
+        "Hallucination": {
+          "score": 0.6666666666666666,
+          "success": false,
+          "reason": "The score is 0.67 because there are factual alignments (1) and contradictions (2), indicating some level of accuracy and inaccuracy in the model's response.",
+          "error": null
+        }
+      }
+    },
+    {
+      "module": "2.3 Customer sentiment & behavior tags",
+      "question": "How does the platform analyze customer sentiment?",
+      "answer": "The platform analyzes customer sentiment by reading a customer's chat history and labeling their mood (positive, neutral, rude, or angry) using the Customer Sentiment & Behavior Tags module. This is done through the POST /api/suggestion/behavior endpoint.\n\n Module(s): Inbox & Conversations > 2.3 Customer sentiment & behavior tags",
+      "model": "llama3.1:8b",
+      "metrics": {
+        "Answer Relevancy": {
+          "score": 0.8,
+          "success": true,
+          "reason": "The score is 0.80 because there is one relevant statement, but it's not perfect as the answer could have been more detailed or provided additional context.",
+          "error": null
+        },
+        "Faithfulness": {
+          "score": 0.5714285714285714,
+          "success": true,
+          "reason": "The score is 0.57 because the actual output contains contradictions where customer sentiment analysis is attributed to different modules and endpoints, indicating some inaccuracies in the description of how customer mood is labeled.",
+          "error": null
+        },
+        "Contextual Precision": {
+          "score": 1.0,
+          "success": true,
+          "reason": "The score is 1.00 because the first node in retrieval context clearly addresses the question, while nodes 2 and 3 are irrelevant as they discuss unrelated topics.",
+          "error": null
+        },
+        "Contextual Recall": {
+          "score": null,
+          "success": false,
+          "reason": null,
+          "error": "1 validation error for Verdicts\nverdicts.2.verdict\n  Field required [type=missing, input_value={'reason': \"1st node in t... a business question (\"}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing"
+        },
+        "Contextual Relevancy": {
+          "score": 0.15384615384615385,
+          "success": false,
+          "reason": "The score is 0.15 because the retrieval context contained unrelated information about API endpoints, but one relevant statement mentions how the platform analyzes customer sentiment, which is also a duplicate of the input question.",
+          "error": null
+        },
+        "Hallucination": {
+          "score": 0.5,
+          "success": true,
+          "reason": "The score is 0.50 because the model hallucinated a mood ('rude') not explicitly mentioned in the context, and missed another ('negative'), indicating some level of error.",
+          "error": null
+        }
+      }
+    },
+    {
+      "module": "3.1 AI template generation",
+      "question": "How does AI template generation work for WhatsApp messages?",
+      "answer": "According to the context, AI template generation for WhatsApp messages works as follows:\n\nYou describe what you want in the message (e.g. \"promo for a new fitness app\"), and the AI generates 3 Meta-compliant WhatsApp templates (header, body, footer, buttons) that it has auto-checked against Meta's rules and categorized correctly. The AI can generate these templates in multiple languages.\n\nThis feature is available through the \"Templates\" module in WeNext, specifically through the following endpoints:\n\n* Main backend: POST /api/v1/onboarding/generate-templates (onboarding flow)\n* AI engine: POST /api/generate-templates (also supports an uploaded header image)\n\nYou need a Connected WhatsApp Business Account and an AI-enabled plan to use this feature.",
+      "model": "llama3.1:8b",
+      "metrics": {
+        "Answer Relevancy": {
+          "score": 0.75,
+          "success": true,
+          "reason": "The score is 0.75 because there are some irrelevant statements in the actual output, specifically a feature description that doesn't directly address the input question.",
+          "error": null
+        },
+        "Faithfulness": {
+          "score": 0.75,
+          "success": true,
+          "reason": "The score is 0.75 because the actual output deviates from the retrieval context by inaccurately describing template generation as a process, when in fact it's just mentioning API endpoints.",
+          "error": null
+        },
+        "Contextual Precision": {
+          "score": 1.0,
+          "success": true,
+          "reason": "The score is 1.00 because the first two nodes in retrieval contexts are 'yes', indicating they're highly relevant to AI template generation for WhatsApp messages, and the last two nodes are ranked lower with 'no' verdicts, as their reasons ('What it does: Turn a description into a complete, valid WhatsApp Form' and 'What it does: For any customer chat, suggests 3 ready-to-send reply options') clearly show they're not relevant to the topic.",
+          "error": null
+        },
+        "Contextual Recall": {
+          "score": 0.75,
+          "success": true,
+          "reason": "The score is 0.75 because sentences 1, 2, and 6 in the expected output are well-supported by nodes 1 and 2 in retrieval context, while sentence 7 is not supported as it's mentioned in a different node (3) that already appeared with an unsupportive reason.",
+          "error": null
+        },
+        "Contextual Relevancy": {
+          "score": null,
+          "success": false,
+          "reason": null,
+          "error": "3 validation errors for ContextualRelevancyVerdicts\nverdicts.1.verdict\n  Field required [type=missing, input_value={'statement': \"it even au...nguages.\", 'reason': ''}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing\nverdicts.4.verdict\n  Field required [type=missing, input_value={'statement': 'Connected ...ed plan.', 'reason': ''}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing\nverdicts.6.verdict\n  Field required [type=missing, input_value={'statement': 'AI engine:... image).', 'reason': ''}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing"
+        },
+        "Hallucination": {
+          "score": 0.0,
+          "success": true,
+          "reason": "The score is 0.00 because the actual output accurately reflects the provided context, indicating no hallucinations.",
+          "error": null
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+[
+  {
+    "module": "9.1 WhatsApp AI Agent",
+    "question": "How does the WhatsApp AI agent decide what to say to customers?",
+    "expected_answer": "The WhatsApp AI Agent is a 24/7 AI assistant that answers FAQs, searches the product catalog, and can take orders, using the business's uploaded knowledge and business context. It supports voice notes (transcribed) and hands off to a human when needed. It's set up via AI -> WhatsApp AI Agent -> pick business account -> add knowledge (website + documents) -> set control level (answer-only / take-orders / sales-rep) and active hours -> Enable.",
+    "expected_context": [
+      "What it does: A 24/7 AI assistant on your WhatsApp that answers FAQs, searches your product catalog, and can even take orders — using your uploaded knowledge and business context. Supports voice notes (transcribed) and hands off to a human when needed. | How to use: AI -> WhatsApp AI Agent -> pick business account -> add knowledge (website + documents) -> set control level (answer-only / take-orders / sales-rep) and active hours -> Enable -> test from a real phone. | What's required: Connected WhatsApp Business Account; AI-enabled plan (whatsapp_ai_agent); knowledge sources added; Organisation AI Knowledge recommended."
+    ]
+  },
+  {
+    "module": "1.2 Nexus AI",
+    "question": "What is Nexus AI and what can it do?",
+    "expected_answer": "Nexus AI (branded 'PhotonX Nexus AI', also referred to as 'Aria' or 'Sonny' for social features) is a full-page AI workspace assistant that connects to roughly 230 platform actions across 30 areas of the app. It can pull reports, draft and send messages, launch campaigns, manage contacts and leads, publish social posts, and create ads by chat. It only works with the user's own business data and refuses general-knowledge questions. Safeguards include confirmation gates for risky bulk actions, privacy masking of phone numbers/emails, permission-aware visibility of tools, and AI-credit cost tracking. It supports voice input and file attachments.",
+    "expected_context": [
+      "What it does: A full-page AI assistant that can actually run your whole workspace by chat. It isn't just a chatbot that talks — it connects to ~230 platform actions across 30 areas of the app, so you can ask it to do things and it does them: pull reports, draft and send messages, launch campaigns, manage contacts and leads, publish social posts, create ads, and more. It streams its answer and shows a 'tool card' for every action it takes. It is a workspace assistant, not a general chatbot — it only works with your own business data and refuses off-topic / general-knowledge questions. Confirmation gates — bulk campaigns use a two-step 'confirm before send'; permanent deletes, 100+ recipient sends, and removing/demoting team members require explicit confirmation. Privacy masking — customer phone numbers and emails are hidden from the AI model and only filled back in when the action actually runs. Permission-aware — it only ever sees your own account's data. Cost tracking — every message deducts AI credits and is metered."
+    ]
+  },
+  {
+    "module": "2.1 AI reply suggestions",
+    "question": "How do AI reply suggestions work in the WhatsApp inbox?",
+    "expected_answer": "For any customer chat, the feature suggests 3 ready-to-send reply options, each with a different tone, so agents can reply faster. It's used by opening a conversation in the Inbox, tapping the AI-suggestions action, picking a reply, editing if needed, and sending. It requires a connected WhatsApp Business Account and an AI-enabled plan.",
+    "expected_context": [
+      "What it does: For any customer chat, suggests 3 ready-to-send reply options (each with a tone), so agents reply faster. | How to use: Open a conversation in the Inbox -> tap the AI-suggestions action -> pick a reply, edit if needed, send. | What's required: Connected WhatsApp Business Account; AI-enabled plan. | Endpoints (AI engine): POST /api/suggestion/responses — 3 reply suggestions for a WhatsApp chat."
+    ]
+  },
+  {
+    "module": "2.3 Customer sentiment & behavior tags",
+    "question": "How does the platform analyze customer sentiment?",
+    "expected_answer": "It reads a customer's chat history and labels their mood (positive, neutral, rude, or angry), assigns a 1-10 satisfaction score, and identifies the conversation stage. This then rolls up into weekly and monthly trend tags shown on dashboards.",
+    "expected_context": [
+      "What it does: Reads a customer's chat history and labels their mood (positive / neutral / rude / angry), a 1–10 satisfaction score, and the conversation stage — then rolls it up into weekly/monthly trend tags for dashboards. | Endpoints (AI engine): POST /api/suggestion/behavior · POST /api/suggestion/tags"
+    ]
+  },
+  {
+    "module": "3.1 AI template generation",
+    "question": "How does AI template generation work for WhatsApp messages?",
+    "expected_answer": "You describe what you want (e.g. 'promo for a new fitness app') and the AI writes 3 Meta-compliant WhatsApp templates, including header, body, footer, and buttons. It auto-checks Meta's rules, picks the right category, and can generate in multiple languages. It's used via Templates -> Create -> describe the message -> the AI returns 3 options -> pick one and submit for Meta approval. It requires a connected WhatsApp Business Account.",
+    "expected_context": [
+      "What it does: Describe what you want ('promo for a new fitness app') and the AI writes 3 Meta-compliant WhatsApp templates (header, body, footer, buttons) — it even auto-checks Meta's rules and picks the right category, in multiple languages. | How to use: Templates -> Create -> describe your message -> the AI returns 3 options -> pick and submit for Meta approval. Also offered during onboarding. | What's required: Connected WhatsApp Business Account (to submit for approval); AI-enabled plan."
+    ]
+  },
+  {
+    "module": "4.1 WhatsApp automation builder",
+    "question": "How does the WhatsApp automation builder use AI?",
+    "expected_answer": "You describe an automation in plain English and the AI builds the entire visual flow — triggers, messages, conditions, appointments, payments, etc. Inside flows, an AI reply node and an AI agent node let the bot answer dynamically instead of using fixed text, and a Flow copilot can edit flows for you via chat. It requires a connected WhatsApp Business Account and an AI knowledge base for the AI nodes to draw on.",
+    "expected_context": [
+      "What it does: Describe an automation in plain English and the AI builds the whole visual flow (triggers, messages, conditions, appointments, payments, etc.). Inside flows, an AI reply node and AI agent node let the bot answer dynamically instead of using fixed text. | How to use: Automations -> WhatsApp Automation -> generate a flow with AI or build it on the canvas -> drop in AI nodes -> Save -> test -> Activate. A Flow copilot can also edit flows for you via chat. | What's required: Connected WhatsApp Business Account; automation enabled on plan; an AI knowledge base for the AI nodes to draw on."
+    ]
+  },
+  {
+    "module": "5.1 Leads Board AI lead analysis",
+    "question": "How does AI lead analysis work on the Leads Board?",
+    "expected_answer": "It reads each lead's conversations and suggests the right pipeline stage, writes a short summary and next steps, and automatically updates the lead's position on the board. You can also ask CRM questions in plain English, like how many leads closed today. It requires connected WhatsApp conversation data, and customer personal data is automatically masked before being sent to the AI.",
+    "expected_context": [
+      "What it does: Reads each lead's conversations and suggests the right pipeline stage, writes a short summary and next steps, and updates the lead's position on the board. | How to use: CRM -> Leads Board -> run/trigger lead analysis; stages update automatically. Also ask CRM questions in plain English ('how many leads closed today?'). | What's required: Connected WhatsApp (conversation data); AI-enabled plan. (Customer personal data is automatically masked before it goes to the AI.)"
+    ]
+  },
+  {
+    "module": "5.2 Daily AI lead insights",
+    "question": "What are Daily AI lead insights?",
+    "expected_answer": "Every morning, this feature automatically summarizes the previous day's new leads and can email the summary to chosen recipients. The summary is also shown on the dashboard. It's an automatic daily job with no button to trigger it — you just configure the email time and recipients in Settings.",
+    "expected_context": [
+      "What it does: Every morning, automatically summarizes the previous day's new leads and can email the summary to chosen recipients. Shown on the dashboard. | How to use: Settings -> set the daily email time/recipients. Runs automatically (no button). | What's required: AI-enabled plan; (optional) email recipients configured. Generation itself is an automatic daily job; results appear in the dashboard response."
+    ]
+  },
+  {
+    "module": "5.3 AI voice calls (Bolna)",
+    "question": "How do AI voice calls work?",
+    "expected_answer": "An AI voice agent, powered by Bolna, makes and answers phone calls for things like appointment reminders, lead qualification, and follow-ups, using a configured script, chosen voice/language, and human-handoff rules. It can be triggered automatically when a lead reaches a specific board stage. It requires the ai_calling entitlement, a configured calling channel or AI phone number, and legal compliance such as consent and DND/opt-out handling.",
+    "expected_context": [
+      "What it does: An AI that makes/answers phone calls — appointment reminders, lead qualification, follow-ups — with a script, chosen voice/language, and human-handoff rules. Can be triggered automatically when a lead reaches a board stage. | How to use: AI -> Voice Agents -> Create -> set name/voice/language + script + knowledge + transfer rules -> connect a calling number -> test -> enable. | What's required: ai_calling entitlement (page is locked otherwise); a configured calling channel / AI phone number; Legal compliance: consent, DND/opt-out, recording disclosure, human escalation."
+    ]
+  },
+  {
+    "module": "6.1 Meta Ads AI",
+    "question": "What AI features are available for Meta Ads?",
+    "expected_answer": "The AI can generate a full campaign from an image or video, building the campaign, ad sets, copy, and an A/B plan. It also provides AI ad copy through an AI ads assistant, suggests promoting your best organic posts with budget/objective/audience recommendations, and predicts reach and frequency for a planned campaign. It requires a connected Meta ad account with an access token.",
+    "expected_context": [
+      "Several ad helpers: Generate a full campaign from an image or video (the AI 'looks' at your creative and builds campaign + ad sets + copy + A/B plan). AI ad copy and an AI ads assistant. 'Promote this post' suggestions — the AI spots your best organic posts and recommends promoting them (budget, objective, audience). Reach/frequency predictions for a planned campaign. | What's required: Connected Meta ad account + access token; AI-enabled plan."
+    ]
+  },
+  {
+    "module": "7.1 AI insights (ask your data)",
+    "question": "How can I ask questions about my data in plain English?",
+    "expected_answer": "The AI Insights feature lets you ask a business question in plain English, such as 'top campaigns this month?', and the AI turns it into a safe, read-only database query scoped to your account, runs it, and returns a chart plus written insights. It's accessed via Reports & Analytics -> AI Insights tab.",
+    "expected_context": [
+      "What it does: Ask a business question ('top campaigns this month?', 'Instagram engagement last 30 days') and the AI turns it into a safe database query, runs it, and returns a chart + written insights. Safety guardrails keep it read-only and scoped to your account. | How to use: Reports & Analytics -> AI Insights tab -> type your question -> view the chart and summary."
+    ]
+  },
+  {
+    "module": "7.2 Campaign predictions",
+    "question": "What do campaign predictions tell you before sending a campaign?",
+    "expected_answer": "Before sending a campaign, this feature predicts performance metrics — sent, delivered, read, failed, and blocked rates — along with risks and recommendations, based on the template's Meta quality rating and past campaign performance. It's requested during campaign setup before scheduling or sending, and requires an existing template plus an audience size.",
+    "expected_context": [
+      "What it does: Before you send a campaign, predicts how it will perform — sent, delivered, read, failed, blocked — with rates, risks, and recommendations, based on your template's Meta quality and past campaigns. | How to use: In the campaign setup, request a prediction before scheduling/sending. | What's required: An existing template + audience size; AI-enabled plan."
+    ]
+  },
+  {
+    "module": "8 Instagram AI Automation",
+    "question": "How does Instagram AI auto-reply work?",
+    "expected_answer": "Instead of just suggesting replies, this feature automatically replies to Instagram comments and DMs. The AI classifies each message as a real question, complaint, compliment, spam, or needs-human, and responds using the post's details and business knowledge. It requires an Instagram Business/Creator account linked to a Facebook Page, Instagram Automation enabled on the plan, and the Organisation AI Knowledge filled in. Meta forces an 'assistant' disclosure greeting on the first reply that cannot be removed.",
+    "expected_context": [
+      "What it does: Instead of suggesting replies, this automatically replies to Instagram comments and DMs. The AI classifies each message (real question, complaint, compliment, spam, needs-human) and responds using your post details and business knowledge. | What's required: Instagram Business/Creator account linked to a Facebook Page and connected in WeNext. Instagram Automation enabled on plan. Organisation AI Knowledge filled in. Note: Meta forces an 'assistant' disclosure greeting on the first reply/DM (can't be removed)."
+    ]
+  },
+  {
+    "module": "9.2 Live Chat AI Agent",
+    "question": "What is the Live Chat AI Agent and how do I add it to my website?",
+    "expected_answer": "It's an embeddable website chat widget whose look, tone, and starter questions auto-match the website, backed by the same knowledge-grounded AI agent used for WhatsApp. It optionally supports in-widget shopping (catalog, cart, orders), and conversations land in the unified inbox. To set it up: go to AI -> Live Chat, customize the launcher (color, icon, greeting) and hours, copy the embed snippet, and paste it into the website; attach a knowledge-based AI agent to answer visitors.",
+    "expected_context": [
+      "What it does: An embeddable website chat widget whose look, tone, and starter questions are auto-matched to your site, backed by the same knowledge-grounded AI agent. Conversations land in your unified inbox. Includes optional in-widget shopping (catalog/cart/orders). | How to use: AI -> Live Chat -> customize the launcher (color, icon, greeting) + hours -> copy the embed snippet -> paste into your website. Attach a knowledge-based AI agent to answer visitors."
+    ]
+  },
+  {
+    "module": "How the AI Is Built — models used",
+    "question": "What AI models power WeNext's AI features?",
+    "expected_answer": "OpenAI GPT-4o-mini handles most text tasks such as replies, templates, analysis, and classification. OpenAI gpt-image-2 handles image generation. GPT-4o Vision reads images and video frames, like ad creatives and captions. Bolna is the AI voice-call engine, and Cloudflare Whisper handles voice-to-text in the AI workspace.",
+    "expected_context": [
+      "OpenAI GPT-4o-mini — text (replies, templates, analysis, classification) — the workhorse for almost everything. OpenAI gpt-image-2 — image generation. GPT-4o Vision — 'reading' images/video frames (ad creatives, captions). Bolna — the AI voice-call engine. Cloudflare Whisper — voice-to-text in the AI workspace."
+    ]
+  }
+]
