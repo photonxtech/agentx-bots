@@ -1,24 +1,24 @@
 # QA Automation & DeepEval Studio
 
-## Project overview
+## Project Overview
 
-This project is a FastAPI-based application for generating QA test cases from uploaded source documents such as PDF, TXT, and Markdown files. It combines:
+This project is a FastAPI-based application for generating QA test cases from uploaded source documents such as PDF, TXT, and Markdown files. It provides:
 
 - document ingestion and text extraction
-- optional vision-based document analysis for PDF pages
+- optional vision-based PDF page analysis
 - Groq-backed LLM generation for QA datasets
 - DeepEval-based quality evaluation and scoring
 - a simple web UI served from the `static` directory
 
 Generated sessions are stored locally in a SQLite database file named `qa_sessions.db`.
 
-## Setup instructions
+## Setup Instructions
 
 ### 1. Prerequisites
 
 - Python 3.10+
 - pip
-- A valid Groq API key
+- A valid Groq API key(s)
 
 ### 2. Create and activate a virtual environment
 
@@ -35,30 +35,33 @@ python -m venv env
 pip install -r requirements.txt
 ```
 
-### 4. Create a local environment file
+### 4. Create a local `.env` file
 
-Create a `.env` file in the project root with the required variables (see below).
+Create a `.env` file in this folder with the required environment variables (see below).
 
-## Required environment variables
+## Required Environment Variables
 
 The application reads the following environment variables:
 
 ```env
 GROQ_API_KEY=your_groq_api_key_here
+```
 
-# Optional overrides
+Optional overrides:
+
+```env
 VISION_MODEL=qwen/qwen3.6-27b
 GEVAL_JUDGE_MODEL=llama-3.3-70b-versatile
 RAG_JUDGE_MODEL=openai/gpt-oss-120b
 GROQ_EVAL_CONCURRENCY=2
 ```
 
-## How to run the project locally
+## How to Run the Project Locally
 
-Start the FastAPI server with:
+With the virtual environment activated, start the FastAPI server:
 
 ```powershell
-uvicorn main:app --reload --host 127.0.0.1 --port 8001         
+uvicorn main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 Then open:
@@ -67,26 +70,26 @@ Then open:
 http://127.0.0.1:8001/
 ```
 
-The root URL serves the web interface, while the API is available under `/api`.
+The root URL serves the web interface, and the API is available under `/api`.
 
-## API endpoints
+## API Endpoints
 
 ### Session management
 
 - `GET /api/sessions` — list all sessions
 - `POST /api/sessions` — create a new session
-- `GET /api/sessions/{session_id}` — get a specific session
+- `GET /api/sessions/{session_id}` — retrieve a specific session
 
 ### Generation and evaluation
 
 - `POST /api/sessions/{session_id}/generate` — upload a document and generate QA test cases for a session
-- `POST /api/sessions/{session_id}/approve` — mark a session as part of the golden dataset
+- `POST /api/sessions/{session_id}/approve` — mark a session as approved for the golden dataset
 
 ### Golden dataset export
 
 - `GET /api/golden-dataset/export` — export approved golden dataset sessions
 
-## Additional notes and dependencies
+## Additional Notes and Dependencies
 
 ### Supported input formats
 

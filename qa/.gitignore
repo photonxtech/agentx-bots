@@ -3,22 +3,27 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environments
+# Virtual environments and local Python environments
 .env
 .venv/
 env/
 venv/
 ENV/
+__pypackages__/
 
 # Local database and generated artifacts
 qa_sessions.db
 *.sqlite3
 *.db
 .deepeval/
+*.cache
+*.cache/
 
 # IDE/editor files
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
 
 # OS files
 .DS_Store
@@ -38,3 +43,5 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+*.whl
+pip-wheel-metadata/

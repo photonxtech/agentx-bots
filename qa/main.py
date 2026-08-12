@@ -6,6 +6,7 @@ import time
 import io
 import base64
 import asyncio
+import threading
 import sqlite3
 from typing import Optional, List
 from dotenv import load_dotenv
@@ -13,10 +14,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import fitz  # PyMuPDF
+import numpy as np
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
-from groq import Groq, RateLimitError
+from pydantic import BaseModel, Field
+from groq import Groq
 
 # DeepEval Custom LLM Imports & Metrics
 from deepeval.models.base_model import DeepEvalBaseLLM
@@ -29,22 +32,193 @@ from deepeval.metrics import (
     GEval
 )
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+from deepeval.synthesizer import Synthesizer
+from deepeval.synthesizer.config import EvolutionConfig
+from deepeval.synthesizer.types import Evolution
 
 app = FastAPI(title="QA Generator with Vision Model & Split DeepEval via Groq")
 
-groq_api_key = os.getenv("GROQ_API_KEY")
-groq_client = Groq(api_key=groq_api_key) if groq_api_key else None
+def _load_groq_api_keys() -> List[str]:
+    """Collects Groq API keys from any of:
+    - GROQ_API_KEYS="key1,key2,key3,key4,key5" (comma-separated, recommended
+      for several free-tier accounts)
+    - GROQ_API_KEY_1 .. GROQ_API_KEY_10 (one env var per key)
+    - GROQ_API_KEY (single key, kept for backwards compatibility)
+    Order is preserved and duplicates are dropped."""
+    keys: List[str] = []
+    multi = os.getenv("GROQ_API_KEYS", "")
+    if multi.strip():
+        keys.extend(k.strip() for k in multi.split(",") if k.strip())
+    for i in range(1, 11):
+        k = os.getenv(f"GROQ_API_KEY_{i}")
+        if k and k.strip():
+            keys.append(k.strip())
+    single = os.getenv("GROQ_API_KEY")
+    if single and single.strip():
+        keys.append(single.strip())
+    seen = set()
+    unique_keys = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            unique_keys.append(k)
+    return unique_keys
+
+
+class GroqKeyPool:
+    """Round-robins across several Groq API keys (e.g. from different
+    free-tier accounts). Every call site in this file goes through
+    generate_content_with_key_rotation() below instead of talking to a single
+    Groq directly, so the instant one key hits a rate limit, the very
+    next request (and the retry of the one that just failed) transparently
+    uses the next key — looping back around to the first key once every key
+    has been tried. A short per-key cooldown avoids immediately re-picking a
+    key that *just* rate-limited, even on unrelated concurrent calls."""
+
+    def __init__(self, api_keys: List[str]):
+        if not api_keys:
+            raise ValueError("No Groq API keys configured.")
+        self.api_keys = api_keys
+        self._clients = [Groq(api_key=k) for k in api_keys]
+        self._lock = threading.Lock()
+        self._current = 0
+        self._cooldown_until = [0.0] * len(api_keys)
+
+    @staticmethod
+    def _mask(key: str) -> str:
+        return f"...{key[-4:]}" if len(key) > 4 else "****"
+
+    def current_client(self):
+        with self._lock:
+            return self._clients[self._current], self._current
+
+    def rotate(self, from_index: int, cooldown_seconds: float = 60.0):
+        """Marks from_index as cooling down and switches to the next key that
+        isn't currently cooling down (or just the next one in line if every
+        key is cooling down — better to retry a cooling key than get stuck)."""
+        with self._lock:
+            self._cooldown_until[from_index] = time.time() + cooldown_seconds
+            n = len(self._clients)
+            chosen = (from_index + 1) % n
+            for step in range(1, n + 1):
+                candidate = (from_index + step) % n
+                if time.time() >= self._cooldown_until[candidate]:
+                    chosen = candidate
+                    break
+            self._current = chosen
+            print(f"[GroqKeyPool] Key {from_index} ({self._mask(self.api_keys[from_index])}) "
+                  f"rate-limited — switching to key {self._current} "
+                  f"({self._mask(self.api_keys[self._current])}).")
+            return self._clients[self._current], self._current
+
+    def num_keys(self) -> int:
+        return len(self._clients)
+
+
+_groq_keys = _load_groq_api_keys()
+groq_pool = GroqKeyPool(_groq_keys) if _groq_keys else None
+# Kept around only for simple truthiness checks / anything expecting a client
+# object directly; actual requests always go through generate_content_with_key_rotation.
+groq_client = groq_pool.current_client()[0] if groq_pool else None
 DB_FILE = "qa_sessions.db"
 
 # Model Configuration
-VISION_MODEL = os.getenv("VISION_MODEL", "qwen/qwen3.6-27b") # Groq Vision model
+GENERATION_MODEL = os.getenv("GENERATION_MODEL", "llama-3.3-70b-versatile")
+VISION_MODEL = os.getenv("VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")  # Groq multimodal model
 GEVAL_JUDGE_MODEL = os.getenv("GEVAL_JUDGE_MODEL", "llama-3.3-70b-versatile")
-RAG_JUDGE_MODEL = os.getenv("RAG_JUDGE_MODEL", "openai/gpt-oss-120b")
+RAG_JUDGE_MODEL = os.getenv("RAG_JUDGE_MODEL", "llama-3.3-70b-versatile")
+SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL", "llama-3.3-70b-versatile")
 
-EVAL_CONCURRENCY_LIMIT = int(os.getenv("GROQ_EVAL_CONCURRENCY", "2"))
+EVAL_CONCURRENCY_LIMIT = int(os.getenv("EVAL_CONCURRENCY", "3"))
 _eval_semaphore = asyncio.Semaphore(EVAL_CONCURRENCY_LIMIT)
 
-_RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)(ms|s)", re.IGNORECASE)
+# Limits how many questions are processed (retrieval + RAG answer + eval)
+# concurrently in a single "Run RAG Pipeline" call, independent of the
+# per-metric-call semaphore above.
+RAG_CONCURRENCY_LIMIT = int(os.getenv("RAG_PIPELINE_CONCURRENCY", "3"))
+_rag_semaphore = asyncio.Semaphore(RAG_CONCURRENCY_LIMIT)
+
+
+_RETRY_AFTER_RE = re.compile(r"retry(?:Delay|_delay)?[\"'\s:]*[\{\s]*([\d.]+)\s*(ms|s)|try again in ([\d.]+)(ms|s)", re.IGNORECASE)
+
+# --- Proactive TPM (tokens-per-minute) throttling ---
+# The semaphores above only cap how many requests are in flight at once; they
+# don't cap how many tokens are used in a rolling 60s window, which is what
+# Groq's free tier actually rate-limits on. Under concurrent DeepEval metric
+# calls that budget is easy to blow through even with low concurrency, so we
+# throttle *before* sending a request instead of only retrying after a 429.
+class TokenRateLimiter:
+    """Thread-safe sliding-window token-per-minute limiter. acquire() blocks
+    (sleeping) until enough budget is free rather than raising, so callers
+    just get slowed down instead of erroring out."""
+
+    def __init__(self, tpm_limit: int, window_seconds: float = 60.0):
+        self.tpm_limit = max(int(tpm_limit), 1)
+        self.window = window_seconds
+        self._lock = threading.Lock()
+        self._usage: List[tuple] = []  # [(timestamp, tokens), ...]
+
+    def _prune(self, now: float):
+        cutoff = now - self.window
+        while self._usage and self._usage[0][0] < cutoff:
+            self._usage.pop(0)
+
+    def acquire(self, tokens: int):
+        tokens = max(int(tokens), 1)
+        # If a single request exceeds the whole budget, let it through alone
+        # rather than spinning forever.
+        tokens = min(tokens, self.tpm_limit)
+        while True:
+            with self._lock:
+                now = time.time()
+                self._prune(now)
+                used = sum(t for _, t in self._usage)
+                if used + tokens <= self.tpm_limit:
+                    self._usage.append((now, tokens))
+                    return
+                oldest_ts = self._usage[0][0] if self._usage else now
+                wait_time = max(oldest_ts + self.window - now, 0.25)
+            time.sleep(min(wait_time, 5.0))
+
+
+def estimate_tokens(*texts: str) -> int:
+    """Rough token estimate (chars/4, a standard heuristic) plus a small
+    fixed overhead for message formatting and the completion itself."""
+    total_chars = sum(len(t) for t in texts if t)
+    return max(total_chars // 4, 1) + 400
+
+
+_rate_limiters: dict = {}
+_rate_limiter_registry_lock = threading.Lock()
+
+
+def _tpm_env_key(model_name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", model_name).upper()
+    return f"TPM_{safe}"
+
+
+def get_rate_limiter(model_name: str) -> "TokenRateLimiter":
+    with _rate_limiter_registry_lock:
+        limiter = _rate_limiters.get(model_name)
+        if limiter is None:
+            default_tpm = int(os.getenv("DEFAULT_TPM", "200000"))
+            tpm = int(os.getenv(_tpm_env_key(model_name), str(default_tpm)))
+            limiter = TokenRateLimiter(tpm)
+            _rate_limiters[model_name] = limiter
+        return limiter
+
+DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+_EMBEDDING_MODEL_CACHE: dict = {}
+
+# --- RAG Pipeline Config (from the "Models & Params" modal) ---
+class RAGConfigRequest(BaseModel):
+    chat_model: str = Field(default="llama-3.3-70b-versatile")
+    embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL)
+    chunk_size: int = Field(default=1000, ge=50, le=8000)
+    chunk_overlap: int = Field(default=200, ge=0, le=4000)
+    top_k: int = Field(default=4, ge=1, le=20)
+    search_model: str = Field(default="similarity")
+    temperature: float = Field(default=0.0, ge=0.0, le=1.0)
 
 # --- Database Setup ---
 def init_db():
@@ -69,6 +243,37 @@ def init_db():
     existing_columns = {row[1] for row in cursor.fetchall()}
     if "test_case_count" not in existing_columns:
         cursor.execute("ALTER TABLE sessions ADD COLUMN test_case_count INTEGER DEFAULT 20")
+    if "rag_config" not in existing_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN rag_config TEXT")
+    if "per_question_results" not in existing_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN per_question_results TEXT")
+    if "golden_dataset" not in existing_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN golden_dataset TEXT")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            chat_model TEXT,
+            embedding_model TEXT,
+            chunk_size INTEGER,
+            chunk_overlap INTEGER,
+            top_k INTEGER,
+            search_model TEXT,
+            temperature REAL,
+            model_config TEXT,
+            retrieved_context TEXT,
+            feedback TEXT,
+            feedback_reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+    """)
+    cursor.execute("PRAGMA table_info(chat_messages)")
+    chat_columns = {row[1] for row in cursor.fetchall()}
+    if "feedback_reason" not in chat_columns:
+        cursor.execute("ALTER TABLE chat_messages ADD COLUMN feedback_reason TEXT")
     conn.commit()
     conn.close()
 
@@ -100,33 +305,120 @@ TEST_CASE_DEPTH_INSTRUCTIONS = {
 }
 ALLOWED_TEST_CASE_COUNTS = (10, 20, 30)
 
+# Mirrors TEST_CASE_DEPTH_INSTRUCTIONS but for the golden-dataset synthesis
+# step: deeper depths get harder/more varied DeepEval "evolutions" applied
+# to the synthetic questions, not just more of them.
+SYNTHESIS_EVOLUTION_CONFIG = {
+    10: EvolutionConfig(num_evolutions=1, evolutions={Evolution.REASONING: 1.0}),
+    20: EvolutionConfig(num_evolutions=1, evolutions={
+        Evolution.REASONING: 0.5, Evolution.MULTICONTEXT: 0.5
+    }),
+    30: EvolutionConfig(num_evolutions=2, evolutions={
+        Evolution.REASONING: 0.25, Evolution.MULTICONTEXT: 0.25,
+        Evolution.COMPARATIVE: 0.25, Evolution.HYPOTHETICAL: 0.25
+    }),
+}
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    text = str(e).lower()
+    return "429" in text or "resource_exhausted" in text or "rate limit" in text or "quota" in text
+
+
+def _build_groq_messages(contents, config=None):
+    system_instruction = None
+    temperature = None
+    response_format = None
+    if config:
+        system_instruction = config.get("system_instruction")
+        temperature = config.get("temperature")
+        response_format = config.get("response_format")
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    if isinstance(contents, list):
+        parts = []
+        for item in contents:
+            if isinstance(item, str):
+                parts.append({"type": "text", "text": item})
+            elif isinstance(item, bytes):
+                encoded = base64.b64encode(item).decode("utf-8")
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{encoded}"}
+                })
+            else:
+                parts.append({"type": "text", "text": str(item)})
+        messages.append({"role": "user", "content": parts})
+    else:
+        messages.append({"role": "user", "content": str(contents)})
+    return messages
+
+def generate_content_with_key_rotation(model: str, contents, config=None, cooldown_seconds: float = 60.0):
+    """The single choke point every Groq call in this file goes through.
+    Tries the pool's currently active key; if that key comes back rate
+    limited, immediately rotates to the next key and retries the SAME
+    request — looping through every configured key (multiple free-tier
+    accounts) before giving up. Non-rate-limit errors are raised straight
+    away so callers' own retry/backoff logic (transient 5xx, etc.) still
+    applies on top of this."""
+    if not groq_pool:
+        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+
+    n = groq_pool.num_keys()
+    last_err = None
+    # Try every key at most once per call; if even a full loop through all
+    # keys is rate limited, let the error bubble up to the caller's own
+    # retry/backoff loop rather than spinning here.
+    for _ in range(n):
+        client, idx = groq_pool.current_client()
+        try:
+            request_kwargs = dict(config or {})
+            request_kwargs.pop("system_instruction", None)
+            request_kwargs.pop("response_mime_type", None)
+            return client.chat.completions.create(
+                model=model,
+                messages=_build_groq_messages(contents, config),
+                **request_kwargs
+            )
+        except Exception as e:
+            last_err = e
+            if _is_rate_limit_error(e):
+                groq_pool.rotate(idx, cooldown_seconds=cooldown_seconds)
+                continue
+            raise
+    raise last_err
+
+
 # --- Custom Groq Evaluator ---
 class GroqEvaluatorLLM(DeepEvalBaseLLM):
-    def __init__(self, model_name="openai/gpt-oss-120b"):
+    def __init__(self, model_name="llama-3.3-70b-versatile"):
         self.model_name = model_name
-        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     def load_model(self):
-        return self.client
+        return groq_pool
 
     def generate(self, prompt: str) -> str:
         truncated_prompt = prompt[:4000]
         max_retries = 5
         base_delay = 3.0
+        limiter = get_rate_limiter(self.model_name)
 
         for attempt in range(max_retries):
             try:
-                chat_completion = self.client.chat.completions.create(
-                    messages=[{"role": "user", "content": truncated_prompt}],
+                limiter.acquire(estimate_tokens(truncated_prompt))
+                response = generate_content_with_key_rotation(
                     model=self.model_name,
-                    temperature=0.0
+                    contents=truncated_prompt,
+                    config={"temperature": 0.0},
                 )
-                return chat_completion.choices[0].message.content
+                return (response.choices[0].message.content or "")
             except Exception as e:
-                is_rate_limit = "rate_limit_exceeded" in str(e).lower() or isinstance(e, RateLimitError)
-                if is_rate_limit and attempt < max_retries - 1:
+                if _is_rate_limit_error(e) and attempt < max_retries - 1:
+                    # Every key in the pool was already tried and rate limited
+                    # inside generate_content_with_key_rotation — at this
+                    # point we back off for real before looping the pool again.
                     sleep_time = self._resolve_retry_delay(str(e), attempt, base_delay)
-                    print(f"[DeepEval] Rate limit hit on {self.model_name}. Retrying in {sleep_time:.1f}s...")
+                    print(f"[DeepEval] All keys rate limited on {self.model_name}. Retrying in {sleep_time:.1f}s...")
                     time.sleep(sleep_time)
                     continue
                 raise e
@@ -135,8 +427,9 @@ class GroqEvaluatorLLM(DeepEvalBaseLLM):
     def _resolve_retry_delay(error_text: str, attempt: int, base_delay: float) -> float:
         match = _RETRY_AFTER_RE.search(error_text)
         if match:
-            value, unit = float(match.group(1)), match.group(2).lower()
-            suggested = value / 1000.0 if unit == "ms" else value
+            groups = match.groups()
+            value, unit = (groups[0], groups[1]) if groups[0] is not None else (groups[2], groups[3])
+            suggested = float(value) / 1000.0 if unit.lower() == "ms" else float(value)
             return suggested + 0.5
         return base_delay * (attempt + 1)
 
@@ -149,38 +442,24 @@ class GroqEvaluatorLLM(DeepEvalBaseLLM):
 
 # --- Vision Analysis Helper ---
 def analyze_page_image_with_vision(image_bytes: bytes) -> str:
-    """Passes page rendering image to Groq Multimodal Vision model to describe visual content."""
-    if not groq_client:
+    """Passes page rendering image to Groq's multimodal model to describe visual content."""
+    if not groq_pool:
         return ""
-    
+
     try:
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        response = groq_client.chat.completions.create(
+        response = generate_content_with_key_rotation(
             model=VISION_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text", 
-                            "text": (
-                                "Examine this document page image. Describe all visual components, "
-                                "including diagrams, flowcharts, UI mockups, infographics, visual tables, "
-                                "and embedded image annotations in explicit detail."
-                            )
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
+            contents=[
+                (
+                    "Examine this document page image. Describe all visual components, "
+                    "including diagrams, flowcharts, UI mockups, infographics, visual tables, "
+                    "and embedded image annotations in explicit detail."
+                ),
+                image_bytes,
             ],
-            temperature=0.1
+            config={"temperature": 0.1},
         )
-        return response.choices[0].message.content.strip()
+        return (response.choices[0].message.content or "").strip()
     except Exception as e:
         print(f"[Vision Analysis Failed]: {e}")
         return ""
@@ -212,7 +491,6 @@ def extract_document_text(file_bytes: bytes, filename: str) -> str:
         print(f"Text extraction error: {e}")
     return text_content.strip()
 
-
 def chunk_document(text: str, chunk_size: int = 400, overlap: int = 40, max_chunks: int = 3) -> List[str]:
     text = text.strip()
     if not text:
@@ -229,6 +507,280 @@ def chunk_document(text: str, chunk_size: int = 400, overlap: int = 40, max_chun
 
     return chunks if chunks else [text[:chunk_size]]
 
+# --- RAG Pipeline: field extraction (mirrors the frontend's flexible
+# question/answer key matching in index.html, so any custom sample_json
+# schema the user typed still resolves to a question/ground-truth pair) ---
+QUESTION_FIELD_KEYS = ["question", "ques", "query", "input"]
+ANSWER_FIELD_KEYS = ["answer", "ground_truth", "groundtruth", "expected", "expected_output", "response"]
+
+def find_field(obj: dict, candidates: List[str]):
+    if not isinstance(obj, dict):
+        return None
+    lower_map = {k.lower(): k for k in obj.keys()}
+    for candidate in candidates:
+        if candidate in lower_map:
+            return obj[lower_map[candidate]]
+    return None
+
+def extract_items_array(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+    return None
+
+def extract_questions_for_rag(generated_json) -> List[dict]:
+    items = extract_items_array(generated_json)
+    if not items:
+        return []
+    questions = []
+    for idx, item in enumerate(items):
+        q = find_field(item, QUESTION_FIELD_KEYS)
+        a = find_field(item, ANSWER_FIELD_KEYS)
+        if q:
+            questions.append({
+                "index": idx,
+                "question": str(q),
+                "expected_output": str(a) if a not in (None, "") else None
+            })
+    return questions
+
+# --- RAG Pipeline: chunking, embedding, retrieval ---
+def chunk_document_full(text: str, chunk_size: int = 1000, overlap: int = 200, max_chunks: int = 300) -> List[str]:
+    """Chunks the FULL document (not truncated/capped like chunk_document(),
+    which only samples the first few chunks for the aggregate eval). This is
+    what the RAG pipeline actually retrieves against."""
+    text = text.strip()
+    if not text:
+        return []
+    chunk_size = max(chunk_size, 50)
+    overlap = min(max(overlap, 0), chunk_size - 1)
+    step = max(chunk_size - overlap, 1)
+
+    chunks = []
+    start = 0
+    while start < len(text) and len(chunks) < max_chunks:
+        chunk = text[start:start + chunk_size].strip()
+        if chunk:
+            chunks.append(chunk)
+        start += step
+    return chunks
+
+def select_contexts_for_synthesis(chunk_texts: List[str], count: int) -> List[List[str]]:
+    """Evenly samples `count` chunks across the full document and wraps each
+    as its own single-chunk context group, so each golden the synthesizer
+    produces is grounded in one contiguous, spread-out piece of the doc
+    rather than clustering near the start. If the doc has fewer chunks than
+    `count`, every chunk is used once (synthesize_golden_dataset tops the
+    count off via max_goldens_per_context instead)."""
+    if not chunk_texts:
+        return []
+    n = len(chunk_texts)
+    if n >= count:
+        indices = sorted({int(i * n / count) for i in range(count)})
+        if len(indices) < count:
+            remaining = [i for i in range(n) if i not in indices]
+            indices = sorted(indices + remaining[: count - len(indices)])
+        return [[chunk_texts[i]] for i in indices]
+    return [[c] for c in chunk_texts]
+
+
+async def synthesize_golden_dataset(doc_text: str, count: int) -> List[dict]:
+    """Uses DeepEval's Synthesizer to generate a golden QA dataset grounded
+    directly in the source document. This becomes the ground truth for both
+    the generation prompt (each golden is reformatted 1:1 into the target
+    schema) and the per-item evaluation afterwards — replacing the old
+    approach of using sample_json (or a single auto-summarized reference)
+    as the expected_output for evaluation."""
+    if not doc_text or not doc_text.strip():
+        return []
+
+    chunk_texts = chunk_document_full(doc_text, chunk_size=800, overlap=100, max_chunks=max(count * 3, 60))
+    if not chunk_texts:
+        return []
+
+    contexts = select_contexts_for_synthesis(chunk_texts, count)
+    if not contexts:
+        return []
+
+    max_goldens_per_context = 1 if len(chunk_texts) >= count else max(1, -(-count // len(contexts)))
+    evolution_config = SYNTHESIS_EVOLUTION_CONFIG.get(count, SYNTHESIS_EVOLUTION_CONFIG[20])
+
+    synth_llm = GroqEvaluatorLLM(model_name=SYNTHESIZER_MODEL)
+    synthesizer = Synthesizer(model=synth_llm, async_mode=True, evolution_config=evolution_config)
+
+    try:
+        goldens = await synthesizer.a_generate_goldens_from_contexts(
+            contexts=contexts,
+            include_expected_output=True,
+            max_goldens_per_context=max_goldens_per_context,
+        )
+    except Exception as e:
+        print(f"[Synthesizer] Golden dataset generation failed, falling back to direct generation: {e}")
+        return []
+
+    golden_items = [
+        {
+            "question": g.input,
+            "expected_output": g.expected_output,
+            "context": g.context or [],
+        }
+        for g in goldens if g and g.input
+    ]
+    return golden_items[:count]
+
+
+def get_embedding_model(model_name: str):
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="sentence-transformers is not installed. Run: pip install sentence-transformers"
+        )
+    model_name = (model_name or "").strip() or DEFAULT_EMBEDDING_MODEL
+    if model_name not in _EMBEDDING_MODEL_CACHE:
+        try:
+            _EMBEDDING_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load embedding model '{model_name}': {e}"
+            )
+    return _EMBEDDING_MODEL_CACHE[model_name]
+
+def mmr_select(chunk_embeddings: np.ndarray, sims_to_query: np.ndarray, top_k: int, lambda_param: float = 0.5) -> List[int]:
+    """Maximal Marginal Relevance re-ranking — used when the config's
+    'Search Model' field mentions 'mmr', to trade a bit of top-1 relevance
+    for less redundant chunks."""
+    selected: List[int] = []
+    candidates = list(range(len(sims_to_query)))
+    while len(selected) < top_k and candidates:
+        if not selected:
+            best = max(candidates, key=lambda i: sims_to_query[i])
+        else:
+            def mmr_score(i):
+                relevance = sims_to_query[i]
+                diversity = max(float(chunk_embeddings[i] @ chunk_embeddings[j]) for j in selected)
+                return lambda_param * relevance - (1 - lambda_param) * diversity
+            best = max(candidates, key=mmr_score)
+        selected.append(best)
+        candidates.remove(best)
+    return selected
+
+def retrieve_top_k(query: str, chunk_texts: List[str], chunk_embeddings: np.ndarray, embed_model, top_k: int, search_mode: str) -> List[str]:
+    if not chunk_texts:
+        return []
+    top_k = max(1, min(top_k, len(chunk_texts)))
+    query_vec = embed_model.encode([query], normalize_embeddings=True)[0]
+    sims = chunk_embeddings @ query_vec  # embeddings are pre-normalized, so this is cosine similarity
+
+    if search_mode and "mmr" in search_mode.lower():
+        selected_idx = mmr_select(chunk_embeddings, sims, top_k)
+    else:
+        selected_idx = list(np.argsort(-sims)[:top_k])
+
+    return [chunk_texts[i] for i in selected_idx]
+
+async def generate_rag_answer(question: str, context_chunks: List[str], chat_model: str, temperature: float, improvement_feedback: Optional[dict] = None) -> str:
+    """Calls the configured chat model with ONLY the retrieved chunks as
+    context — this is the actual RAG answer that gets evaluated, distinct
+    from any ground_truth/expected_output the QA generator produced."""
+    context_text = "\n\n---\n\n".join(context_chunks) if context_chunks else "No relevant context was retrieved."
+    system_instruction = (
+        "You are a RAG assistant. Answer the user's question using ONLY the "
+        "provided context. If the context does not contain the answer, say "
+        "you don't know — do not use outside knowledge."
+    )
+    improvement_note = ""
+    if improvement_feedback:
+        previous_answer = str(improvement_feedback.get("answer") or "").strip()
+        previous_reason = str(improvement_feedback.get("feedback_reason") or "").strip()
+        improvement_note = (
+            "\n\nPREVIOUS NEGATIVE FEEDBACK:\n"
+            "A previous answer to this same question was rated negatively. "
+            "Improve the new answer instead of blindly repeating the previous response.\n"
+            f"Previous answer: {previous_answer}\n"
+            f"Reason for negative feedback: {previous_reason or 'No reason was provided.'}\n"
+            "Use the retrieved document context to correct or improve the answer. "
+            "Do not mention this feedback to the user."
+        )
+    user_content = f"CONTEXT:\n{context_text}\n\nQUESTION:\n{question}\n\nAnswer concisely using only the context above.{improvement_note}"
+
+    max_retries = 4
+    base_delay = 2.0
+    limiter = get_rate_limiter(chat_model)
+    for attempt in range(max_retries):
+        try:
+            await asyncio.to_thread(limiter.acquire, estimate_tokens(context_text, question))
+            response = await asyncio.to_thread(
+                generate_content_with_key_rotation,
+                model=chat_model,
+                contents=user_content,
+                config={
+                    "temperature": temperature,
+                    "system_instruction": system_instruction,
+                },
+            )
+            return (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < max_retries - 1:
+                # All keys in the pool were already tried inside
+                # generate_content_with_key_rotation — back off before the
+                # next full loop through the pool.
+                sleep_time = GroqEvaluatorLLM._resolve_retry_delay(str(e), attempt, base_delay)
+                print(f"[RAG Pipeline] All keys rate limited on {chat_model}. Retrying in {sleep_time:.1f}s...")
+                await asyncio.sleep(sleep_time)
+                continue
+            raise
+
+async def evaluate_single_question(question: str, rag_answer: str, context_chunks: List[str],
+                                    expected_output: Optional[str], eval_llm: "GroqEvaluatorLLM") -> dict:
+    """Runs DeepEval metrics for ONE question/answer pair produced by the RAG
+    pipeline. ContextualPrecision/Recall are skipped when the question has no
+    ground_truth/expected_output in the generated dataset, since those two
+    metrics require an expected_output to compare against."""
+    test_case = LLMTestCase(
+        input=question,
+        actual_output=rag_answer,
+        retrieval_context=context_chunks if context_chunks else ["No context retrieved."],
+        expected_output=expected_output
+    )
+
+    metrics = {
+        "faithfulness": FaithfulnessMetric(threshold=0.7, model=eval_llm),
+        "answer_relevancy": AnswerRelevancyMetric(threshold=0.7, model=eval_llm),
+        "contextual_relevancy": ContextualRelevancyMetric(threshold=0.7, model=eval_llm),
+    }
+    if expected_output:
+        metrics["contextual_precision"] = ContextualPrecisionMetric(threshold=0.7, model=eval_llm)
+        metrics["contextual_recall"] = ContextualRecallMetric(threshold=0.7, model=eval_llm)
+
+    await asyncio.gather(*(m.a_measure(test_case) for m in metrics.values()))
+
+    metrics_out = {}
+    scores = []
+    all_passed = True
+    for name, m in metrics.items():
+        score = round(float(m.score), 2) if m.score is not None else 0.0
+        passed = bool(m.is_successful())
+        metrics_out[name] = {"score": score, "passed": passed, "reason": m.reason}
+        scores.append(score)
+        all_passed = all_passed and passed
+
+    overall = round(sum(scores) / len(scores), 2) if scores else 0.0
+
+    return {
+        "question": question,
+        "expected_output": expected_output,
+        "rag_answer": rag_answer,
+        "retrieved_context": context_chunks,
+        "metrics": metrics_out,
+        "overall_score": overall,
+        "passed": all_passed
+    }
 
 def build_reference_answer(eval_llm: "GroqEvaluatorLLM", context_chunks: List[str]) -> Optional[str]:
     try:
@@ -244,9 +796,13 @@ def build_reference_answer(eval_llm: "GroqEvaluatorLLM", context_chunks: List[st
         print(f"[DeepEval] Reference answer generation failed: {e}")
         return None
 
-
 async def run_deepeval_evaluation(doc_text: str, generated_json: dict, sample_json: str = "") -> dict:
-    if not os.getenv("GROQ_API_KEY"):
+    """Aggregate, single-score DeepEval pass over the whole generated dataset,
+    run immediately after generation (mirrors the original app's flow). This
+    is intentionally NOT a per-question breakdown — that only happens later,
+    once the user submits a model config and the RAG pipeline runs
+    (see run_rag_pipeline / evaluate_single_question below)."""
+    if not groq_pool:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY missing for evaluation.")
 
     try:
@@ -359,7 +915,6 @@ async def list_sessions():
     conn.close()
     return [{"id": r["session_id"], "title": r["title"], "status": r["status"], "is_golden": bool(r["is_golden"])} for r in rows]
 
-
 @app.post("/api/sessions")
 async def create_session():
     new_id = str(uuid.uuid4())
@@ -373,7 +928,6 @@ async def create_session():
     conn.commit()
     conn.close()
     return {"id": new_id, "title": title}
-
 
 @app.get("/api/sessions/{session_id}")
 async def get_session(session_id: str):
@@ -395,9 +949,12 @@ async def get_session(session_id: str):
         "generated_data": json.loads(row["generated_qa"]) if row["generated_qa"] else None,
         "deepeval_score": row["deepeval_score"],
         "deepeval_details": json.loads(row["deepeval_details"]) if row["deepeval_details"] else None,
-        "test_case_count": row["test_case_count"] if row["test_case_count"] else 20
+        "test_case_count": row["test_case_count"] if row["test_case_count"] else 20,
+        "rag_config": json.loads(row["rag_config"]) if row["rag_config"] else None,
+        "chat_enabled": bool(row["rag_config"] and row["source_doc"]),
+        "per_question_results": json.loads(row["per_question_results"]) if row["per_question_results"] else None,
+        "golden_dataset": json.loads(row["golden_dataset"]) if row["golden_dataset"] else None
     }
-
 
 @app.post("/api/sessions/{session_id}/generate")
 async def generate_qa_testcases(
@@ -427,31 +984,67 @@ async def generate_qa_testcases(
         content = await file.read()
         doc_text = extract_document_text(content, filename)
 
-    if not groq_client:
+    if not groq_pool:
         conn.close()
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY environment variable missing.")
+        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
 
     truncated_context = doc_text[:8000] if doc_text else "No document context uploaded."
 
-    depth_instruction = TEST_CASE_DEPTH_INSTRUCTIONS[test_case_count]
+    # Step 1: synthesize a golden QA dataset from the actual document via
+    # DeepEval's Synthesizer. This is the ground truth from here on —
+    # sample_json is used ONLY for output schema/shape, never as expected_output.
+    golden_items = await synthesize_golden_dataset(doc_text, test_case_count)
 
     has_page_markers = "[PAGE " in truncated_context
     page_instruction = (
         "The document context contains [PAGE n] markers showing where each page starts. "
         "For every test case, add a field named \"page_no\" set to the integer page number "
-        "the underlying fact was drawn from."
+        "the underlying fact was drawn from — cross-reference each item's question/answer "
+        "against the document context below to find the right page."
         if has_page_markers else
         "The document has no page markers (non-PDF source). Omit any page_no field, "
         "or set it to null if your schema requires the key to be present."
     )
 
-    system_prompt = (
-        "You are an expert QA Automation Engineer. Generate QA test cases "
-        "extracted strictly from the provided text and visual diagram descriptions in the source document, "
-        "adhering to the target JSON schema."
-    )
+    if golden_items:
+        # Step 2: give the LLM the golden dataset + the document, and have it
+        # reformat each golden 1:1 (same order, same count) into the target
+        # schema — this keeps generation aligned with the goldens so the
+        # per-item eval below can match by index with no fuzzy matching.
+        golden_dataset_json = json.dumps(golden_items, indent=2)
+        system_prompt = (
+            "You are an expert QA Automation Engineer. You are given a source document AND a "
+            "synthetically generated golden QA dataset already derived from that same document. "
+            "Reformat EACH golden item, in the same order, into the target JSON schema — do not "
+            "invent new facts, do not drop items, do not merge items, do not add extra items. "
+            "Preserve the original question intent and answer content; only adapt structure and "
+            "field names to match the schema, and fill in any schema fields (like page_no) using "
+            "the source document."
+        )
+        user_prompt = f"""DOCUMENT CONTEXT:
+{truncated_context}
 
-    user_prompt = f"""DOCUMENT CONTEXT:
+GOLDEN QA DATASET (produce exactly one output item per golden item below, in this same order):
+{golden_dataset_json}
+
+TARGET SAMPLE JSON SCHEMA:
+{sample_json if sample_json else "{}"}
+
+PAGE NUMBER INSTRUCTION:
+{page_instruction}
+"""
+    else:
+        # Fallback: golden synthesis produced nothing (e.g. very short/empty
+        # doc, or the synthesizer call failed) — generate directly from the
+        # document like before, and skip per-item eval since there's no
+        # golden ground truth to evaluate against.
+        depth_instruction = TEST_CASE_DEPTH_INSTRUCTIONS[test_case_count]
+        system_prompt = (
+            "You are an expert QA Automation Engineer. Generate QA test cases "
+            "extracted strictly from the provided text and visual diagram descriptions in the source document, "
+            "adhering to the target JSON schema."
+        )
+        user_prompt = f"""DOCUMENT CONTEXT:
 {truncated_context}
 
 TARGET SAMPLE JSON SCHEMA:
@@ -464,33 +1057,48 @@ PAGE NUMBER INSTRUCTION:
 {page_instruction}
 """
 
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.2
-        )
-        generated_json = json.loads(response.choices[0].message.content)
-    except Exception as e:
-        conn.close()
-        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+    max_retries = 4
+    base_delay = 2.0
+    for attempt in range(max_retries):
+        try:
+            response = generate_content_with_key_rotation(
+                model=GENERATION_MODEL,
+                contents=user_prompt,
+                config={
+                    "temperature": 0.2,
+                    "system_instruction": system_prompt,
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            generated_json = json.loads(response.choices[0].message.content)
+            break
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < max_retries - 1:
+                sleep_time = GroqEvaluatorLLM._resolve_retry_delay(str(e), attempt, base_delay)
+                print(f"[Generate] All keys rate limited on {GENERATION_MODEL}. Retrying in {sleep_time:.1f}s...")
+                time.sleep(sleep_time)
+                continue
+            conn.close()
+            raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
     await asyncio.sleep(1)
 
+    # Step 3: aggregate DeepEval pass over the whole generated dataset. This
+    # is a single overall score shown right after generation — the detailed
+    # per-question breakdown is deliberately NOT shown here; it only appears
+    # later, once the user submits a model config and the RAG pipeline runs
+    # (see /run-rag below).
     eval_results = await run_deepeval_evaluation(doc_text, generated_json, sample_json)
 
     conn.execute(
         """UPDATE sessions 
            SET filename = ?, sample_json = ?, source_doc = ?, generated_qa = ?, 
-               deepeval_score = ?, deepeval_details = ?, is_golden = 0, status = 'Pending',
+               golden_dataset = ?, deepeval_score = ?, deepeval_details = ?, is_golden = 0, status = 'Pending',
                test_case_count = ?
            WHERE session_id = ?""",
         (filename, sample_json, doc_text, json.dumps(generated_json),
-         eval_results["overall_score"], json.dumps(eval_results), test_case_count, session_id)
+         json.dumps(golden_items), eval_results["overall_score"], json.dumps(eval_results),
+         test_case_count, session_id)
     )
     conn.commit()
     conn.close()
@@ -506,6 +1114,7 @@ PAGE NUMBER INSTRUCTION:
 
     return {
         "generated_qa": generated_json,
+        "golden_dataset": golden_items,
         "deepeval": eval_results,
         "status": "Pending",
         "is_golden": False,
@@ -514,6 +1123,331 @@ PAGE NUMBER INSTRUCTION:
         "actual_count": actual_count
     }
 
+@app.put("/api/sessions/{session_id}/qa")
+async def update_generated_qa(session_id: str, payload: dict):
+    """Persists user edits made to the generated QA dataset in the UI. Marks
+    the session 'Edited' so it's visually distinct from a freshly generated,
+    unreviewed dataset; the stored golden_dataset is left untouched so the
+    edited QA can be re-evaluated against it via /re-evaluate."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT session_id FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    raw = payload.get("generated_qa")
+    if raw is None:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Missing 'generated_qa' in request body.")
+
+    # Accept either an already-parsed JSON value or a JSON string.
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError as e:
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"generated_qa must be valid JSON: {e}")
+
+    conn.execute(
+        "UPDATE sessions SET generated_qa = ?, status = 'Edited' WHERE session_id = ?",
+        (json.dumps(parsed), session_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"message": "Edits saved", "status": "Edited"}
+
+@app.post("/api/sessions/{session_id}/re-evaluate")
+async def re_evaluate_generated_qa(session_id: str):
+    """Re-runs the aggregate DeepEval evaluation on the session's (saved)
+    generated QA dataset — useful right after editing it in the UI, without
+    re-generating from scratch. Same aggregate scoring used right after
+    generation; the per-question breakdown still only comes from /run-rag."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not row["generated_qa"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No generated QA dataset on this session.")
+
+    generated_json = json.loads(row["generated_qa"])
+    doc_text = row["source_doc"] or ""
+    sample_json = row["sample_json"] or ""
+
+    eval_results = await run_deepeval_evaluation(doc_text, generated_json, sample_json)
+
+    conn.execute(
+        "UPDATE sessions SET deepeval_score = ?, deepeval_details = ? WHERE session_id = ?",
+        (eval_results["overall_score"], json.dumps(eval_results), session_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"deepeval": eval_results}
+
+@app.post("/api/sessions/{session_id}/save-rag-config")
+async def save_rag_config(session_id: str, config: RAGConfigRequest):
+    """Saves the RAG configuration for this session without running the pipeline.
+    Saving the configuration is enough to enable the document chat UI."""
+    if not groq_pool:
+        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+
+    conn = get_db_connection()
+    row = conn.execute("SELECT source_doc FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not (row["source_doc"] or "").strip():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Upload a document before saving the RAG configuration.")
+
+    config_dict = config.dict()
+    conn.execute(
+        "UPDATE sessions SET rag_config = ? WHERE session_id = ?",
+        (json.dumps(config_dict), session_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"rag_config": config_dict, "chat_enabled": True, "message": "Configuration saved."}
+
+@app.post("/api/sessions/{session_id}/run-rag")
+async def run_rag_pipeline(session_id: str, config: Optional[RAGConfigRequest] = None):
+    """Runs an actual RAG pipeline (chunk -> embed -> retrieve -> generate
+    answer) over the session's source document, once per generated question,
+    using the config from the 'Models & Params' modal, then evaluates each
+    question individually with DeepEval and returns/stores a per-question
+    results table. The ground truth used for evaluation (expected_output)
+    comes from the session's synthesized golden dataset — matched to each
+    generated question by its original index — not from whatever the
+    generated QA item itself happens to contain, since the golden dataset is
+    the actual source of truth. Falls back to the generated item's own
+    answer field only if no matching golden is available."""
+    if not groq_pool:
+        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    doc_text = row["source_doc"] or ""
+    generated_qa_raw = row["generated_qa"]
+    golden_items = json.loads(row["golden_dataset"]) if row["golden_dataset"] else []
+
+    # Run always uses the last saved configuration when no body is supplied.
+    if config is None:
+        if not row["rag_config"]:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Save the RAG configuration before running the pipeline.")
+        try:
+            config = RAGConfigRequest(**json.loads(row["rag_config"]))
+        except Exception as e:
+            conn.close()
+            raise HTTPException(status_code=400, detail=f"Saved RAG configuration is invalid: {e}")
+
+    if not doc_text.strip():
+        conn.close()
+        raise HTTPException(status_code=400, detail="No source document on this session. Upload a document and generate test cases first.")
+    if not generated_qa_raw:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No generated QA test cases on this session. Generate test cases before running the RAG pipeline.")
+
+    generated_json = json.loads(generated_qa_raw)
+    questions = extract_questions_for_rag(generated_json)
+    if not questions:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Could not find any question fields in the generated QA dataset.")
+
+    # Overlay each question's ground truth with its matching golden item
+    # (same index the LLM was told to preserve during generation).
+    for q_item in questions:
+        idx = q_item.get("index")
+        if idx is not None and idx < len(golden_items):
+            golden_expected = golden_items[idx].get("expected_output")
+            if golden_expected:
+                q_item["expected_output"] = golden_expected
+
+    chunk_texts = chunk_document_full(doc_text, config.chunk_size, config.chunk_overlap)
+    if not chunk_texts:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Document produced no chunks — check the chunk size / overlap settings.")
+
+    embed_model = get_embedding_model(config.embedding_model)
+    try:
+        raw_embeddings = await asyncio.to_thread(embed_model.encode, chunk_texts, normalize_embeddings=True)
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {str(e)}")
+    chunk_embeddings = np.array(raw_embeddings)
+
+    eval_llm = GroqEvaluatorLLM(model_name=RAG_JUDGE_MODEL)
+    chat_model = config.chat_model.strip() if config.chat_model and config.chat_model.strip() else GEVAL_JUDGE_MODEL
+
+    async def process_one(q_item: dict) -> dict:
+        async with _rag_semaphore:
+            retrieved = retrieve_top_k(
+                q_item["question"], chunk_texts, chunk_embeddings,
+                embed_model, config.top_k, config.search_model
+            )
+            rag_answer = await generate_rag_answer(q_item["question"], retrieved, chat_model, config.temperature)
+            return await evaluate_single_question(
+                q_item["question"], rag_answer, retrieved, q_item["expected_output"], eval_llm
+            )
+
+    try:
+        per_question_results = await asyncio.gather(*(process_one(q) for q in questions))
+    except Exception as e:
+        conn.close()
+        print(f"RAG Pipeline Execution Error: {e}")
+        raise HTTPException(status_code=500, detail=f"RAG pipeline evaluation failed: {str(e)}")
+
+    per_question_results = list(per_question_results)
+    overall_scores = [r["overall_score"] for r in per_question_results]
+    pipeline_overall = round(sum(overall_scores) / len(overall_scores), 2) if overall_scores else 0.0
+    pipeline_passed = all(r["passed"] for r in per_question_results) if per_question_results else False
+
+    config_dict = config.dict()
+
+    conn.execute(
+        "UPDATE sessions SET rag_config = ?, per_question_results = ? WHERE session_id = ?",
+        (json.dumps(config_dict), json.dumps(per_question_results), session_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "rag_config": config_dict,
+        "per_question_results": per_question_results,
+        "pipeline_overall_score": pipeline_overall,
+        "pipeline_passed": pipeline_passed,
+        "chunk_count": len(chunk_texts),
+        "question_count": len(per_question_results)
+    }
+
+@app.post("/api/sessions/{session_id}/chat")
+async def chat_with_document(session_id: str, payload: dict):
+    """Answers one document question using the session's saved RAG configuration.
+    Chat history is persisted for display, but prior turns are not sent as conversation context.
+    A prior negative rating for the same question is used as an improvement signal."""
+    if not groq_pool:
+        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+
+    question = str(payload.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required.")
+
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    doc_text = row["source_doc"] or ""
+    if not doc_text.strip():
+        conn.close()
+        raise HTTPException(status_code=400, detail="No source document on this session.")
+    if not row["rag_config"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Save the RAG configuration before using chat.")
+
+    try:
+        config = RAGConfigRequest(**json.loads(row["rag_config"]))
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"Saved RAG configuration is invalid: {e}")
+
+    previous_negative = conn.execute(
+        """SELECT answer, feedback_reason FROM chat_messages
+           WHERE session_id = ? AND LOWER(TRIM(question)) = LOWER(TRIM(?)) AND feedback = 'no'
+           ORDER BY id DESC LIMIT 1""",
+        (session_id, question)
+    ).fetchone()
+    improvement_feedback = dict(previous_negative) if previous_negative else None
+
+    chunk_texts = chunk_document_full(doc_text, config.chunk_size, config.chunk_overlap)
+    if not chunk_texts:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Document produced no chunks.")
+
+    embed_model = get_embedding_model(config.embedding_model)
+    try:
+        raw_embeddings = await asyncio.to_thread(
+            embed_model.encode, chunk_texts, normalize_embeddings=True
+        )
+        chunk_embeddings = np.array(raw_embeddings)
+        retrieved = await asyncio.to_thread(
+            retrieve_top_k, question, chunk_texts, chunk_embeddings,
+            embed_model, config.top_k, config.search_model
+        )
+        answer = await generate_rag_answer(
+            question, retrieved, config.chat_model, config.temperature, improvement_feedback
+        )
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Chat generation failed: {str(e)}")
+
+    config_dict = config.dict()
+    cursor = conn.execute(
+        """INSERT INTO chat_messages
+           (session_id, question, answer, chat_model, embedding_model, chunk_size,
+            chunk_overlap, top_k, search_model, temperature, model_config, retrieved_context)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            session_id, question, answer, config.chat_model, config.embedding_model,
+            config.chunk_size, config.chunk_overlap, config.top_k, config.search_model,
+            config.temperature, json.dumps(config_dict), json.dumps(retrieved)
+        )
+    )
+    message_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {
+        "message_id": message_id,
+        "question": question,
+        "answer": answer,
+        "feedback": None
+    }
+
+@app.get("/api/sessions/{session_id}/chat-history")
+async def get_chat_history(session_id: str):
+    conn = get_db_connection()
+    row = conn.execute("SELECT session_id FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+    rows = conn.execute(
+        """SELECT id, question, answer, feedback, feedback_reason, created_at
+           FROM chat_messages WHERE session_id = ? ORDER BY id ASC""",
+        (session_id,)
+    ).fetchall()
+    conn.close()
+    return {"messages": [dict(r) for r in rows]}
+
+
+@app.post("/api/chat/{message_id}/feedback")
+async def save_chat_feedback(message_id: int, payload: dict):
+    feedback = str(payload.get("feedback") or "").strip().lower()
+    reason = str(payload.get("reason") or "").strip()[:500] or None
+    if feedback not in ("yes", "no"):
+        raise HTTPException(status_code=400, detail="Feedback must be 'yes' or 'no'.")
+    if feedback == "yes":
+        reason = None
+
+    conn = get_db_connection()
+    row = conn.execute("SELECT id FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Chat message not found")
+
+    conn.execute(
+        "UPDATE chat_messages SET feedback = ?, feedback_reason = ? WHERE id = ?",
+        (feedback, reason if feedback == "no" else None, message_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"message_id": message_id, "feedback": feedback, "feedback_reason": reason if feedback == "no" else None}
 
 @app.post("/api/sessions/{session_id}/approve")
 async def approve_golden_dataset(session_id: str):
@@ -522,7 +1456,6 @@ async def approve_golden_dataset(session_id: str):
     conn.commit()
     conn.close()
     return {"message": "Saved to Golden Dataset", "status": "Approved", "is_golden": True}
-
 
 @app.get("/api/golden-dataset/export")
 async def export_golden_dataset():
