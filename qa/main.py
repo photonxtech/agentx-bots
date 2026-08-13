@@ -5,6 +5,7 @@ import json
 import time
 import io
 import base64
+import hashlib
 import asyncio
 import threading
 import sqlite3
@@ -12,6 +13,26 @@ from typing import Optional, List
 from dotenv import load_dotenv
 
 load_dotenv()
+
+try:
+    from langsmith import Client as LangSmithClient, trace as langsmith_trace
+    LANGSMITH_AVAILABLE = True
+except ImportError:
+    LangSmithClient = None
+    langsmith_trace = None
+    LANGSMITH_AVAILABLE = False
+
+LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "false").strip().lower() in ("1", "true", "yes", "on")
+LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "DocQnA-Chat")
+_LANGSMITH_CLIENT = None
+
+def get_langsmith_client():
+    global _LANGSMITH_CLIENT
+    if not LANGSMITH_TRACING or not os.getenv("LANGSMITH_API_KEY") or not LANGSMITH_AVAILABLE:
+        return None
+    if _LANGSMITH_CLIENT is None:
+        _LANGSMITH_CLIENT = LangSmithClient()
+    return _LANGSMITH_CLIENT
 
 import fitz  # PyMuPDF
 import numpy as np
@@ -21,7 +42,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from groq import Groq
 
-# DeepEval Custom LLM Imports & Metrics
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics import (
     FaithfulnessMetric,
@@ -210,6 +230,16 @@ def get_rate_limiter(model_name: str) -> "TokenRateLimiter":
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 _EMBEDDING_MODEL_CACHE: dict = {}
 
+# --- ChromaDB persistent vector store ---
+# Vectors are persisted on disk instead of being rebuilt and kept entirely in
+# Python memory for every RAG request. Set CHROMA_DB_DIR in .env to change the
+# storage location.
+CHROMA_DB_DIR = os.getenv("CHROMA_DB_DIR", "./chroma_db")
+CHROMA_EMBED_BATCH_SIZE = max(int(os.getenv("CHROMA_EMBED_BATCH_SIZE", "64")), 1)
+_CHROMA_CLIENT = None
+_CHROMA_CLIENT_LOCK = threading.Lock()
+_CHROMA_COLLECTION_LOCK = threading.Lock()
+
 # --- RAG Pipeline Config (from the "Models & Params" modal) ---
 class RAGConfigRequest(BaseModel):
     chat_model: str = Field(default="llama-3.3-70b-versatile")
@@ -274,6 +304,8 @@ def init_db():
     chat_columns = {row[1] for row in cursor.fetchall()}
     if "feedback_reason" not in chat_columns:
         cursor.execute("ALTER TABLE chat_messages ADD COLUMN feedback_reason TEXT")
+    if "langsmith_trace_id" not in chat_columns:
+        cursor.execute("ALTER TABLE chat_messages ADD COLUMN langsmith_trace_id TEXT")
     conn.commit()
     conn.close()
 
@@ -398,7 +430,25 @@ class GroqEvaluatorLLM(DeepEvalBaseLLM):
         return groq_pool
 
     def generate(self, prompt: str) -> str:
-        truncated_prompt = prompt[:4000]
+        # DeepEval's metric templates put the "respond ONLY with this JSON
+        # schema" instructions at the END of the prompt (after the
+        # context/question). Blindly slicing prompt[:4000] chopped that tail
+        # off, so the judge model never saw the JSON instructions and replied
+        # in plain text -> "Evaluation LLM outputted an invalid JSON".
+        # Fix: only truncate if we actually need to, and when we do, cut
+        # from the MIDDLE (keep the head with task setup and the tail with
+        # the output-format spec, which DeepEval always needs intact).
+        max_chars = 12000
+        if len(prompt) > max_chars:
+            head_len = int(max_chars * 0.6)
+            tail_len = max_chars - head_len
+            truncated_prompt = (
+                prompt[:head_len]
+                + "\n...[truncated]...\n"
+                + prompt[-tail_len:]
+            )
+        else:
+            truncated_prompt = prompt
         max_retries = 5
         base_delay = 3.0
         limiter = get_rate_limiter(self.model_name)
@@ -548,10 +598,10 @@ def extract_questions_for_rag(generated_json) -> List[dict]:
     return questions
 
 # --- RAG Pipeline: chunking, embedding, retrieval ---
-def chunk_document_full(text: str, chunk_size: int = 1000, overlap: int = 200, max_chunks: int = 300) -> List[str]:
-    """Chunks the FULL document (not truncated/capped like chunk_document(),
-    which only samples the first few chunks for the aggregate eval). This is
-    what the RAG pipeline actually retrieves against."""
+def chunk_document_full(text: str, chunk_size: int = 1000, overlap: int = 200, max_chunks: Optional[int] = None) -> List[str]:
+    """Chunks the full document. max_chunks is optional: the RAG pipeline
+    passes None so large documents are not artificially capped at 300 chunks;
+    the golden-data synthesis path can still pass an explicit cap."""
     text = text.strip()
     if not text:
         return []
@@ -561,12 +611,13 @@ def chunk_document_full(text: str, chunk_size: int = 1000, overlap: int = 200, m
 
     chunks = []
     start = 0
-    while start < len(text) and len(chunks) < max_chunks:
+    while start < len(text) and (max_chunks is None or len(chunks) < max_chunks):
         chunk = text[start:start + chunk_size].strip()
         if chunk:
             chunks.append(chunk)
         start += step
     return chunks
+
 
 def select_contexts_for_synthesis(chunk_texts: List[str], count: int) -> List[List[str]]:
     """Evenly samples `count` chunks across the full document and wraps each
@@ -652,17 +703,19 @@ def get_embedding_model(model_name: str):
     return _EMBEDDING_MODEL_CACHE[model_name]
 
 def mmr_select(chunk_embeddings: np.ndarray, sims_to_query: np.ndarray, top_k: int, lambda_param: float = 0.5) -> List[int]:
-    """Maximal Marginal Relevance re-ranking — used when the config's
-    'Search Model' field mentions 'mmr', to trade a bit of top-1 relevance
-    for less redundant chunks."""
+    """Maximal Marginal Relevance re-ranking over the small candidate set
+    returned by Chroma. Only candidate vectors are held in memory."""
+    if len(sims_to_query) == 0:
+        return []
+    top_k = max(1, min(top_k, len(sims_to_query)))
     selected: List[int] = []
     candidates = list(range(len(sims_to_query)))
     while len(selected) < top_k and candidates:
         if not selected:
-            best = max(candidates, key=lambda i: sims_to_query[i])
+            best = max(candidates, key=lambda i: float(sims_to_query[i]))
         else:
             def mmr_score(i):
-                relevance = sims_to_query[i]
+                relevance = float(sims_to_query[i])
                 diversity = max(float(chunk_embeddings[i] @ chunk_embeddings[j]) for j in selected)
                 return lambda_param * relevance - (1 - lambda_param) * diversity
             best = max(candidates, key=mmr_score)
@@ -670,19 +723,199 @@ def mmr_select(chunk_embeddings: np.ndarray, sims_to_query: np.ndarray, top_k: i
         candidates.remove(best)
     return selected
 
-def retrieve_top_k(query: str, chunk_texts: List[str], chunk_embeddings: np.ndarray, embed_model, top_k: int, search_mode: str) -> List[str]:
-    if not chunk_texts:
+
+def _get_chroma_client():
+    """Creates one process-wide persistent Chroma client."""
+    global _CHROMA_CLIENT
+    if _CHROMA_CLIENT is None:
+        with _CHROMA_CLIENT_LOCK:
+            if _CHROMA_CLIENT is None:
+                try:
+                    import chromadb
+                except ImportError:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="chromadb is not installed. Run: pip install chromadb"
+                    )
+                os.makedirs(CHROMA_DB_DIR, exist_ok=True)
+                _CHROMA_CLIENT = chromadb.PersistentClient(path=CHROMA_DB_DIR)
+    return _CHROMA_CLIENT
+
+
+def _chroma_collection_name(session_id: str) -> str:
+    """Chroma collection names must satisfy Chroma's naming constraints."""
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", session_id).strip("-_")
+    name = f"rag-{safe or 'session'}"
+    return name[:63]
+
+
+def _document_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _iter_document_chunks(text: str, chunk_size: int, overlap: int):
+    """Yield chunks one at a time so embedding/indexing does not require a
+    second full in-memory array of all chunks."""
+    text = text.strip()
+    if not text:
+        return
+    chunk_size = max(chunk_size, 50)
+    overlap = min(max(overlap, 0), chunk_size - 1)
+    step = max(chunk_size - overlap, 1)
+    start = 0
+    while start < len(text):
+        chunk = text[start:start + chunk_size].strip()
+        if chunk:
+            yield chunk
+        start += step
+
+
+def _collection_matches_config(collection, document_hash: str, embedding_model: str, chunk_size: int, chunk_overlap: int) -> bool:
+    metadata = collection.metadata or {}
+    return (
+        metadata.get("document_hash") == document_hash
+        and metadata.get("embedding_model") == embedding_model
+        and int(metadata.get("chunk_size", -1)) == int(chunk_size)
+        and int(metadata.get("chunk_overlap", -1)) == int(chunk_overlap)
+        and collection.count() > 0
+    )
+
+
+def _build_or_get_chroma_collection(
+    session_id: str,
+    doc_text: str,
+    filename: str,
+    embedding_model_name: str,
+    chunk_size: int,
+    chunk_overlap: int,
+):
+    """Return a persistent Chroma collection containing the current document
+    indexed with the current embedding/chunk configuration. If the document
+    or embedding/chunk configuration changed, the session collection is rebuilt."""
+    client = _get_chroma_client()
+    collection_name = _chroma_collection_name(session_id)
+    doc_hash = _document_hash(doc_text)
+
+    with _CHROMA_COLLECTION_LOCK:
+        try:
+            collection = client.get_collection(name=collection_name)
+        except Exception:
+            collection = None
+
+        if collection is not None and _collection_matches_config(
+            collection, doc_hash, embedding_model_name, chunk_size, chunk_overlap
+        ):
+            return collection
+
+        if collection is not None:
+            try:
+                client.delete_collection(name=collection_name)
+            except Exception:
+                pass
+
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            metadata={
+                "hnsw:space": "cosine",
+                "session_id": session_id,
+                "document_hash": doc_hash,
+                "embedding_model": embedding_model_name,
+                "chunk_size": int(chunk_size),
+                "chunk_overlap": int(chunk_overlap),
+                "filename": filename or "",
+            },
+        )
+
+        embed_model = get_embedding_model(embedding_model_name)
+        batch_texts: List[str] = []
+        batch_embeddings = []
+        batch_metadatas = []
+        batch_ids = []
+        chunk_index = 0
+
+        def flush_batch():
+            if not batch_texts:
+                return
+            embeddings = np.asarray(batch_embeddings).tolist()
+            collection.add(
+                ids=list(batch_ids),
+                documents=list(batch_texts),
+                embeddings=embeddings,
+                metadatas=list(batch_metadatas),
+            )
+            batch_texts.clear()
+            batch_embeddings.clear()
+            batch_metadatas.clear()
+            batch_ids.clear()
+
+        for chunk in _iter_document_chunks(doc_text, chunk_size, chunk_overlap):
+            batch_texts.append(chunk)
+            batch_metadatas.append({
+                "session_id": session_id,
+                "document_hash": doc_hash,
+                "filename": filename or "",
+                "chunk_id": chunk_index,
+            })
+            batch_ids.append(f"{session_id}-{doc_hash[:12]}-{chunk_index}")
+            chunk_index += 1
+
+            if len(batch_texts) >= CHROMA_EMBED_BATCH_SIZE:
+                encoded = embed_model.encode(batch_texts, normalize_embeddings=True)
+                batch_embeddings.extend(np.asarray(encoded).tolist())
+                flush_batch()
+
+        if batch_texts:
+            encoded = embed_model.encode(batch_texts, normalize_embeddings=True)
+            batch_embeddings.extend(np.asarray(encoded).tolist())
+            flush_batch()
+
+        if collection.count() == 0:
+            raise HTTPException(status_code=400, detail="Document produced no chunks for ChromaDB.")
+
+        return collection
+
+
+def retrieve_from_chroma(
+    query: str,
+    collection,
+    embed_model,
+    top_k: int,
+    search_mode: str,
+) -> List[str]:
+    """Retrieve context directly from Chroma. Only the query embedding and the
+    small candidate set are held in Python memory; the full document vectors
+    remain in the persistent vector store."""
+    top_k = max(1, int(top_k))
+    query_vec = np.asarray(
+        embed_model.encode([query], normalize_embeddings=True)[0],
+        dtype=np.float32,
+    )
+
+    use_mmr = bool(search_mode and "mmr" in search_mode.lower())
+    candidate_k = min(max(top_k * 4, top_k), 50) if use_mmr else top_k
+
+    result = collection.query(
+        query_embeddings=[query_vec.tolist()],
+        n_results=candidate_k,
+        include=["documents", "metadatas", "embeddings", "distances"],
+    )
+
+    documents = (result.get("documents") or [[]])[0]
+    if not documents:
         return []
-    top_k = max(1, min(top_k, len(chunk_texts)))
-    query_vec = embed_model.encode([query], normalize_embeddings=True)[0]
-    sims = chunk_embeddings @ query_vec  # embeddings are pre-normalized, so this is cosine similarity
 
-    if search_mode and "mmr" in search_mode.lower():
-        selected_idx = mmr_select(chunk_embeddings, sims, top_k)
-    else:
-        selected_idx = list(np.argsort(-sims)[:top_k])
+    if not use_mmr:
+        return [str(doc) for doc in documents[:top_k]]
 
-    return [chunk_texts[i] for i in selected_idx]
+    raw_embeddings = (result.get("embeddings") or [[]])[0]
+    if not raw_embeddings:
+        return [str(doc) for doc in documents[:top_k]]
+
+    candidate_embeddings = np.asarray(raw_embeddings, dtype=np.float32)
+    similarities = candidate_embeddings @ query_vec
+    selected_idx = mmr_select(candidate_embeddings, similarities, top_k)
+    return [str(documents[i]) for i in selected_idx]
+
 
 async def generate_rag_answer(question: str, context_chunks: List[str], chat_model: str, temperature: float, improvement_feedback: Optional[dict] = None) -> str:
     """Calls the configured chat model with ONLY the retrieved chunks as
@@ -1259,8 +1492,6 @@ async def run_rag_pipeline(session_id: str, config: Optional[RAGConfigRequest] =
         conn.close()
         raise HTTPException(status_code=400, detail="Could not find any question fields in the generated QA dataset.")
 
-    # Overlay each question's ground truth with its matching golden item
-    # (same index the LLM was told to preserve during generation).
     for q_item in questions:
         idx = q_item.get("index")
         if idx is not None and idx < len(golden_items):
@@ -1268,26 +1499,31 @@ async def run_rag_pipeline(session_id: str, config: Optional[RAGConfigRequest] =
             if golden_expected:
                 q_item["expected_output"] = golden_expected
 
-    chunk_texts = chunk_document_full(doc_text, config.chunk_size, config.chunk_overlap)
-    if not chunk_texts:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Document produced no chunks — check the chunk size / overlap settings.")
-
-    embed_model = get_embedding_model(config.embedding_model)
     try:
-        raw_embeddings = await asyncio.to_thread(embed_model.encode, chunk_texts, normalize_embeddings=True)
+        collection = await asyncio.to_thread(
+            _build_or_get_chroma_collection,
+            session_id,
+            doc_text,
+            row["filename"] or "",
+            config.embedding_model,
+            config.chunk_size,
+            config.chunk_overlap,
+        )
+    except HTTPException:
+        conn.close()
+        raise
     except Exception as e:
         conn.close()
-        raise HTTPException(status_code=500, detail=f"Embedding failed: {str(e)}")
-    chunk_embeddings = np.array(raw_embeddings)
+        raise HTTPException(status_code=500, detail=f"ChromaDB indexing failed: {str(e)}")
 
+    embed_model = get_embedding_model(config.embedding_model)
     eval_llm = GroqEvaluatorLLM(model_name=RAG_JUDGE_MODEL)
     chat_model = config.chat_model.strip() if config.chat_model and config.chat_model.strip() else GEVAL_JUDGE_MODEL
 
     async def process_one(q_item: dict) -> dict:
         async with _rag_semaphore:
-            retrieved = retrieve_top_k(
-                q_item["question"], chunk_texts, chunk_embeddings,
+            retrieved = await asyncio.to_thread(
+                retrieve_from_chroma, q_item["question"], collection,
                 embed_model, config.top_k, config.search_model
             )
             rag_answer = await generate_rag_answer(q_item["question"], retrieved, chat_model, config.temperature)
@@ -1321,15 +1557,15 @@ async def run_rag_pipeline(session_id: str, config: Optional[RAGConfigRequest] =
         "per_question_results": per_question_results,
         "pipeline_overall_score": pipeline_overall,
         "pipeline_passed": pipeline_passed,
-        "chunk_count": len(chunk_texts),
+        "chunk_count": collection.count(),
         "question_count": len(per_question_results)
     }
 
 @app.post("/api/sessions/{session_id}/chat")
 async def chat_with_document(session_id: str, payload: dict):
-    """Answers one document question using the session's saved RAG configuration.
-    Chat history is persisted for display, but prior turns are not sent as conversation context.
-    A prior negative rating for the same question is used as an improvement signal."""
+    """Answers a document question using the session's saved RAG configuration.
+    Each chat turn is stored in SQLite and, when LangSmith is configured, traced
+    as a root RAG Chat trace with nested retrieval and Groq-generation spans."""
     if not groq_pool:
         raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
 
@@ -1365,50 +1601,162 @@ async def chat_with_document(session_id: str, payload: dict):
     ).fetchone()
     improvement_feedback = dict(previous_negative) if previous_negative else None
 
-    chunk_texts = chunk_document_full(doc_text, config.chunk_size, config.chunk_overlap)
-    if not chunk_texts:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Document produced no chunks.")
+    config_dict = config.dict()
+    ls_client = get_langsmith_client()
+    tracing_enabled = ls_client is not None and langsmith_trace is not None
+    trace_metadata = {
+        "session_id": session_id,
+        "chat_model": config.chat_model,
+        "embedding_model": config.embedding_model,
+        "chunk_size": config.chunk_size,
+        "chunk_overlap": config.chunk_overlap,
+        "top_k": config.top_k,
+        "search_model": config.search_model,
+        "temperature": config.temperature,
+        "document_filename": row["filename"] or "",
+        "feedback_improvement_used": bool(improvement_feedback),
+    }
 
-    embed_model = get_embedding_model(config.embedding_model)
+    if tracing_enabled:
+        trace_ctx = langsmith_trace(
+            name="RAG Chat",
+            run_type="chain",
+            inputs={"question": question},
+            metadata=trace_metadata,
+            tags=["rag", "chat", "groq"],
+            project_name=LANGSMITH_PROJECT,
+            client=ls_client,
+        )
+    else:
+        from contextlib import nullcontext
+        trace_ctx = nullcontext(None)
+
     try:
-        raw_embeddings = await asyncio.to_thread(
-            embed_model.encode, chunk_texts, normalize_embeddings=True
-        )
-        chunk_embeddings = np.array(raw_embeddings)
-        retrieved = await asyncio.to_thread(
-            retrieve_top_k, question, chunk_texts, chunk_embeddings,
-            embed_model, config.top_k, config.search_model
-        )
-        answer = await generate_rag_answer(
-            question, retrieved, config.chat_model, config.temperature, improvement_feedback
-        )
+        with trace_ctx as root_run:
+            collection = await asyncio.to_thread(
+                _build_or_get_chroma_collection,
+                session_id,
+                doc_text,
+                row["filename"] or "",
+                config.embedding_model,
+                config.chunk_size,
+                config.chunk_overlap,
+            )
+            embed_model = get_embedding_model(config.embedding_model)
+
+            if tracing_enabled:
+                with langsmith_trace(
+                    name="Retrieve Context",
+                    run_type="retriever",
+                    inputs={
+                        "question": question,
+                        "top_k": config.top_k,
+                        "search_model": config.search_model,
+                        "vector_store": "ChromaDB",
+                        "collection": _chroma_collection_name(session_id),
+                        "chunk_count": collection.count(),
+                    },
+                    metadata={
+                        "session_id": session_id,
+                        "embedding_model": config.embedding_model,
+                        "chunk_size": config.chunk_size,
+                        "chunk_overlap": config.chunk_overlap,
+                        "vector_store": "ChromaDB",
+                    },
+                    tags=["rag", "retrieval", "chroma"],
+                    project_name=LANGSMITH_PROJECT,
+                    client=ls_client,
+                ) as retrieval_run:
+                    retrieved = await asyncio.to_thread(
+                        retrieve_from_chroma, question, collection,
+                        embed_model, config.top_k, config.search_model
+                    )
+                    if retrieval_run is not None:
+                        retrieval_run.outputs = {
+                            "retrieved_context": retrieved,
+                            "retrieved_chunk_count": len(retrieved),
+                            "vector_store": "ChromaDB",
+                        }
+            else:
+                retrieved = await asyncio.to_thread(
+                    retrieve_from_chroma, question, collection,
+                    embed_model, config.top_k, config.search_model
+                )
+
+            generation_inputs = {
+                "question": question,
+                "context": retrieved,
+                "chat_model": config.chat_model,
+                "temperature": config.temperature,
+                "improvement_feedback_used": bool(improvement_feedback),
+            }
+            if tracing_enabled:
+                with langsmith_trace(
+                    name="Groq Generation",
+                    run_type="llm",
+                    inputs=generation_inputs,
+                    metadata={
+                        "session_id": session_id,
+                        "chat_model": config.chat_model,
+                        "temperature": config.temperature,
+                    },
+                    tags=["llm", "groq", "rag"],
+                    project_name=LANGSMITH_PROJECT,
+                    client=ls_client,
+                ) as generation_run:
+                    answer = await generate_rag_answer(
+                        question, retrieved, config.chat_model, config.temperature, improvement_feedback
+                    )
+                    if generation_run is not None:
+                        generation_run.outputs = {"answer": answer}
+            else:
+                answer = await generate_rag_answer(
+                    question, retrieved, config.chat_model, config.temperature, improvement_feedback
+                )
+            trace_id = str(root_run.id) if root_run is not None else None
+            if root_run is not None:
+                root_run.outputs = {
+                    "question": question,
+                    "answer": answer,
+                    "retrieved_chunk_count": len(retrieved),
+                    "chat_message_pending": True,
+                }
+
+            cursor = conn.execute(
+                """INSERT INTO chat_messages
+                   (session_id, question, answer, chat_model, embedding_model, chunk_size,
+                    chunk_overlap, top_k, search_model, temperature, model_config,
+                    retrieved_context, langsmith_trace_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id, question, answer, config.chat_model, config.embedding_model,
+                    config.chunk_size, config.chunk_overlap, config.top_k, config.search_model,
+                    config.temperature, json.dumps(config_dict), json.dumps(retrieved), trace_id
+                )
+            )
+            message_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+
+            if root_run is not None:
+                root_run.outputs["message_id"] = message_id
+
+            if root_run is not None:
+                pass
+
+            return {
+                "message_id": message_id,
+                "question": question,
+                "answer": answer,
+                "feedback": None,
+                "langsmith_trace_id": trace_id,
+            }
+    except HTTPException:
+        conn.close()
+        raise
     except Exception as e:
         conn.close()
         raise HTTPException(status_code=500, detail=f"Chat generation failed: {str(e)}")
-
-    config_dict = config.dict()
-    cursor = conn.execute(
-        """INSERT INTO chat_messages
-           (session_id, question, answer, chat_model, embedding_model, chunk_size,
-            chunk_overlap, top_k, search_model, temperature, model_config, retrieved_context)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            session_id, question, answer, config.chat_model, config.embedding_model,
-            config.chunk_size, config.chunk_overlap, config.top_k, config.search_model,
-            config.temperature, json.dumps(config_dict), json.dumps(retrieved)
-        )
-    )
-    message_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-
-    return {
-        "message_id": message_id,
-        "question": question,
-        "answer": answer,
-        "feedback": None
-    }
 
 @app.get("/api/sessions/{session_id}/chat-history")
 async def get_chat_history(session_id: str):
@@ -1418,7 +1766,7 @@ async def get_chat_history(session_id: str):
         conn.close()
         raise HTTPException(status_code=404, detail="Session not found")
     rows = conn.execute(
-        """SELECT id, question, answer, feedback, feedback_reason, created_at
+        """SELECT id, question, answer, feedback, feedback_reason, created_at, langsmith_trace_id
            FROM chat_messages WHERE session_id = ? ORDER BY id ASC""",
         (session_id,)
     ).fetchall()
@@ -1436,7 +1784,10 @@ async def save_chat_feedback(message_id: int, payload: dict):
         reason = None
 
     conn = get_db_connection()
-    row = conn.execute("SELECT id FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+    row = conn.execute(
+        "SELECT id, langsmith_trace_id, question, answer, session_id FROM chat_messages WHERE id = ?",
+        (message_id,)
+    ).fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Chat message not found")
@@ -1447,7 +1798,36 @@ async def save_chat_feedback(message_id: int, payload: dict):
     )
     conn.commit()
     conn.close()
-    return {"message_id": message_id, "feedback": feedback, "feedback_reason": reason if feedback == "no" else None}
+
+    # Keep user feedback in LangSmith attached to the exact RAG Chat trace.
+    # Passing trace_id enables background/batched feedback ingestion.
+    ls_client = get_langsmith_client()
+    if ls_client is not None and row["langsmith_trace_id"]:
+        try:
+            ls_client.create_feedback(
+                trace_id=str(row["langsmith_trace_id"]),
+                key="user_feedback",
+                score=1 if feedback == "yes" else 0,
+                value=feedback,
+                comment=reason if feedback == "no" else None,
+                extra={
+                    "message_id": message_id,
+                    "session_id": row["session_id"],
+                    "question": row["question"],
+                    "answer": row["answer"],
+                    "feedback_reason": reason,
+                },
+            )
+        except Exception as e:
+            # LangSmith must never break the application's own feedback flow.
+            print(f"[LangSmith] Failed to record chat feedback: {e}")
+
+    return {
+        "message_id": message_id,
+        "feedback": feedback,
+        "feedback_reason": reason if feedback == "no" else None,
+        "langsmith_recorded": bool(ls_client is not None and row["langsmith_trace_id"]),
+    }
 
 @app.post("/api/sessions/{session_id}/approve")
 async def approve_golden_dataset(session_id: str):

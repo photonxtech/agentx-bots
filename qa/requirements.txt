@@ -7,4 +7,5 @@ pymupdf
 httpx
 deepeval
 sentence-transformers
-scikit-learn
+langsmith
+chromadb

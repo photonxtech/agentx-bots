@@ -223,17 +223,52 @@
                     </div>
                 </div>
 
-                <!-- Document Chat -->
+                <!-- Document Chat (one question at a time) -->
                 <div id="documentChatPanel" class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-3">
                     <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
-                        <div class="flex items-center gap-2"><i class="fa-solid fa-comments text-indigo-400 text-sm"></i><span class="text-xs font-bold text-slate-200 uppercase tracking-wider">Ask About This Document</span></div>
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-comments text-indigo-400 text-sm"></i>
+                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">Ask About This Document</span>
+                        </div>
                         <span id="chatConfigBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-500 border border-slate-800">Configuration not saved</span>
                     </div>
-                    <div id="chatHistory" class="space-y-4 max-h-[520px] overflow-y-auto custom-scrollbar pr-1"></div>
-                    <div class="border-t border-slate-800/80 pt-3">
-                        <textarea id="chatQuestionInput" rows="2" disabled placeholder="Save the RAG configuration first..." class="w-full p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-xs border border-slate-800/80 leading-relaxed resize-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none disabled:opacity-50"></textarea>
-                        <div class="flex justify-end mt-2"><button id="chatAskBtn" onclick="askDocumentQuestion()" disabled class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center gap-2 transition"><i class="fa-solid fa-paper-plane"></i> Ask</button></div>
+
+                    <textarea id="chatQuestionInput" rows="2" disabled placeholder="Save the RAG configuration first..." class="w-full p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-xs border border-slate-800/80 leading-relaxed resize-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none disabled:opacity-50"></textarea>
+                    <div class="flex justify-end">
+                        <button id="chatAskBtn" onclick="askDocumentQuestion()" disabled class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center gap-2 transition">
+                            <i class="fa-solid fa-paper-plane"></i> Ask
+                        </button>
                     </div>
+
+                    <div id="chatHistory" class="space-y-3 max-h-[520px] overflow-y-auto custom-scrollbar pr-1"></div>
+
+                    <div id="chatAnswerCard" class="hidden bg-slate-900/70 border border-slate-800 rounded-lg p-3 space-y-3">
+                        <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Answer</div>
+                        <div id="chatAnswerText" class="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap"></div>
+                        <div class="flex items-center gap-2 pt-1">
+                            <button id="chatThumbUp" onclick="submitChatFeedback('yes')" title="Good answer" class="w-8 h-8 rounded-lg border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/40 transition">
+                                <i class="fa-regular fa-thumbs-up"></i>
+                            </button>
+                            <button id="chatThumbDown" onclick="submitChatFeedback('no')" title="Bad answer" class="w-8 h-8 rounded-lg border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition">
+                                <i class="fa-regular fa-thumbs-down"></i>
+                            </button>
+                            <span id="chatFeedbackStatus" class="text-[10px] font-mono text-slate-500"></span>
+                        </div>
+                        <div id="chatNegativeFeedback" class="hidden space-y-2 pt-1">
+                            <label class="text-[10px] text-slate-400">What was wrong with this answer?</label>
+                            <div class="flex flex-wrap gap-1.5">
+                                <button type="button" onclick="submitNegativeReason('Incorrect information')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Incorrect information</button>
+                                <button type="button" onclick="submitNegativeReason('Not enough detail')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Not enough detail</button>
+                                <button type="button" onclick="submitNegativeReason('Did not answer the question')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Did not answer</button>
+                                <button type="button" onclick="submitNegativeReason('Poorly retrieved information')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Poor retrieval</button>
+                            </div>
+                            <div class="flex gap-2">
+                                <input id="chatOtherReason" type="text" maxlength="500" placeholder="Other reason (optional)" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-[10px] text-slate-200 outline-none focus:border-indigo-500">
+                                <button type="button" onclick="submitNegativeReason(document.getElementById('chatOtherReason').value)" class="px-3 py-2 text-[10px] rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700">Submit</button>
+                            </div>
+                        </div>
+                    </div>
+
                     <p id="chatStatus" class="hidden text-[11px] font-mono px-3 py-2 rounded-lg border"></p>
                 </div>
 
@@ -438,7 +473,7 @@
                 populateRagConfigForm(s.rag_config);
                 setChatEnabled(!!s.chat_enabled);
                 resetChatUI();
-                if (s.chat_enabled) loadChatHistory(activeSessionId, false);
+                if (s.chat_enabled) loadChatHistory(activeSessionId);
                 // chunk_count isn't persisted on its own — only shown right after a fresh run.
                 renderRagResults(s.per_question_results, null, null);
 
@@ -1067,50 +1102,231 @@
         }
 
         let currentChatMessageId = null;
+        let currentChatQuestion = '';
 
         document.getElementById('chatQuestionInput').addEventListener('keydown', function(event) {
-            if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!this.disabled) askDocumentQuestion(); }
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                if (!this.disabled) askDocumentQuestion();
+            }
         });
 
         function setChatEnabled(enabled) {
-            const input=document.getElementById('chatQuestionInput'), btn=document.getElementById('chatAskBtn'), badge=document.getElementById('chatConfigBadge');
-            input.disabled=!enabled; btn.disabled=!enabled;
-            input.placeholder=enabled?'Ask a question about this document...':'Save the RAG configuration first...';
-            badge.innerText=enabled?'Configuration saved':'Configuration not saved';
-            badge.className=enabled?'text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20':'text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-500 border border-slate-800';
+            const input = document.getElementById('chatQuestionInput');
+            const btn = document.getElementById('chatAskBtn');
+            const badge = document.getElementById('chatConfigBadge');
+            input.disabled = !enabled;
+            btn.disabled = !enabled;
+            input.placeholder = enabled ? 'Ask a question about this document...' : 'Save the RAG configuration first...';
+            badge.innerText = enabled ? 'Configuration saved' : 'Configuration not saved';
+            badge.className = enabled
+                ? 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                : 'text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-500 border border-slate-800';
         }
 
-        function resetChatUI() { currentChatMessageId=null; document.getElementById('chatQuestionInput').value=''; document.getElementById('chatHistory').innerHTML=''; document.getElementById('chatStatus').classList.add('hidden'); }
-        function setChatStatus(message,isError) { const el=document.getElementById('chatStatus'); el.innerText=message; el.className=`text-[11px] font-mono px-3 py-2 rounded-lg border ${isError?'bg-rose-500/10 text-rose-400 border-rose-500/20':'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`; el.classList.remove('hidden'); }
-        function escapeChatHtml(v) { return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;'); }
+        function resetChatUI() {
+            currentChatMessageId = null;
+            currentChatQuestion = '';
+            document.getElementById('chatQuestionInput').value = '';
+            document.getElementById('chatHistory').innerHTML = '';
+            document.getElementById('chatAnswerCard').classList.add('hidden');
+            document.getElementById('chatAnswerText').innerText = '';
+            document.getElementById('chatFeedbackStatus').innerText = '';
+            document.getElementById('chatNegativeFeedback').classList.add('hidden');
+            document.getElementById('chatOtherReason').value = '';
+            document.getElementById('chatStatus').classList.add('hidden');
+        }
 
-        function feedbackControlsHtml(m) {
-            if (m.feedback==='yes') return `<div class="mt-2 text-[10px] font-mono text-emerald-400">👍 Helpful</div>`;
-            if (m.feedback==='no') return `<div class="mt-2 text-[10px] font-mono text-rose-400">👎 Not helpful${m.feedback_reason?` — ${escapeChatHtml(m.feedback_reason)}`:''}</div>`;
-            return `<div id="feedback-${m.id}" class="mt-2"><div class="flex gap-1.5"><button type="button" onclick="submitHistoryFeedback(${m.id},'yes')" class="w-7 h-7 rounded-lg border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/40 transition"><i class="fa-regular fa-thumbs-up"></i></button><button type="button" onclick="submitHistoryFeedback(${m.id},'no')" class="w-7 h-7 rounded-lg border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition"><i class="fa-regular fa-thumbs-down"></i></button></div><div id="reason-${m.id}" class="hidden mt-2 space-y-2"><div class="text-[10px] text-slate-400">What was wrong with this answer?</div><div class="flex flex-wrap gap-1.5"><button type="button" onclick="submitHistoryNegativeReason(${m.id},'Incorrect information')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40">Incorrect information</button><button type="button" onclick="submitHistoryNegativeReason(${m.id},'Not enough detail')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40">Not enough detail</button><button type="button" onclick="submitHistoryNegativeReason(${m.id},'Did not answer the question')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40">Did not answer</button><button type="button" onclick="submitHistoryNegativeReason(${m.id},'Poorly retrieved information')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40">Poor retrieval</button></div><div class="flex gap-2"><input id="other-reason-${m.id}" maxlength="500" placeholder="Other reason" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-[10px] text-slate-200 outline-none"><button type="button" onclick="submitHistoryNegativeReason(${m.id},document.getElementById('other-reason-${m.id}').value)" class="px-3 py-2 text-[10px] rounded-lg bg-slate-800 text-slate-300">Submit</button></div></div></div>`;
+        function setChatStatus(message, isError) {
+            const el = document.getElementById('chatStatus');
+            el.innerText = message;
+            el.className = `text-[11px] font-mono px-3 py-2 rounded-lg border ${isError ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`;
+            el.classList.remove('hidden');
+        }
+
+        function escapeChatHtml(value) {
+            return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
         function renderChatHistory(messages) {
-            const history=document.getElementById('chatHistory'); history.innerHTML='';
-            (messages||[]).forEach(m=>{ const card=document.createElement('div'); card.className='space-y-2'; card.innerHTML=`<div class="flex justify-end"><div class="max-w-[88%] bg-indigo-600/15 border border-indigo-500/20 rounded-xl rounded-br-sm px-3 py-2"><div class="text-[9px] text-indigo-300 uppercase font-semibold mb-1">You</div><div class="text-xs text-slate-200 whitespace-pre-wrap">${escapeChatHtml(m.question)}</div></div></div><div class="flex justify-start"><div class="max-w-[92%] bg-slate-900/80 border border-slate-800 rounded-xl rounded-bl-sm px-3 py-2"><div class="text-[9px] text-slate-500 uppercase font-semibold mb-1">Assistant</div><div class="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">${escapeChatHtml(m.answer)}</div>${feedbackControlsHtml(m)}</div></div>`; history.appendChild(card); });
-            history.scrollTop=history.scrollHeight;
+            const history = document.getElementById('chatHistory');
+            history.innerHTML = '';
+            if (!messages || !messages.length) return;
+
+            messages.forEach(m => {
+                const card = document.createElement('div');
+                card.className = 'space-y-2';
+                const feedbackHtml = m.feedback === 'yes'
+                    ? '<span class="text-emerald-400 text-[9px] font-mono">👍 Helpful</span>'
+                    : m.feedback === 'no'
+                        ? `<span class="text-rose-400 text-[9px] font-mono">👎 Not helpful${m.feedback_reason ? ` — ${escapeChatHtml(m.feedback_reason)}` : ''}</span>`
+                        : `
+                            <div class="flex items-center gap-1.5 pt-1">
+                                <button type="button" onclick="submitMessageFeedback(${m.id}, 'yes')" title="Good answer" class="w-7 h-7 rounded-lg border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/40 transition">
+                                    👍
+                                </button>
+                                <button type="button" onclick="showMessageNegativeFeedback(${m.id})" title="Bad answer" class="w-7 h-7 rounded-lg border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition">
+                                    👎
+                                </button>
+                            </div>
+                            <div id="negative-feedback-${m.id}" class="hidden mt-2 space-y-2">
+                                <div class="text-[9px] text-slate-500">What should improve?</div>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button" onclick="submitMessageFeedback(${m.id}, 'no', 'Incorrect information')" class="px-2 py-1 text-[9px] rounded-md bg-slate-800 text-slate-400 hover:text-white">Incorrect</button>
+                                    <button type="button" onclick="submitMessageFeedback(${m.id}, 'no', 'Not enough detail')" class="px-2 py-1 text-[9px] rounded-md bg-slate-800 text-slate-400 hover:text-white">Not enough detail</button>
+                                    <button type="button" onclick="submitMessageFeedback(${m.id}, 'no', 'Did not answer the question')" class="px-2 py-1 text-[9px] rounded-md bg-slate-800 text-slate-400 hover:text-white">Didn't answer</button>
+                                    <button type="button" onclick="submitMessageFeedback(${m.id}, 'no', 'Poor retrieval')" class="px-2 py-1 text-[9px] rounded-md bg-slate-800 text-slate-400 hover:text-white">Poor retrieval</button>
+                                </div>
+                                <div class="flex gap-1.5">
+                                    <input id="other-feedback-${m.id}" type="text" maxlength="500" placeholder="Other reason..." class="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-[9px] text-slate-200 outline-none focus:border-indigo-500">
+                                    <button type="button" onclick="submitOtherMessageFeedback(${m.id})" class="px-2.5 py-1 text-[9px] rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700">Submit</button>
+                                </div>
+                            </div>`;
+
+                card.innerHTML = `
+                    <div class="flex justify-end">
+                        <div class="max-w-[88%] bg-indigo-600/15 border border-indigo-500/20 rounded-xl rounded-br-sm px-3 py-2">
+                            <div class="text-[9px] text-indigo-300 uppercase font-semibold mb-1">You</div>
+                            <div class="text-xs text-slate-200 whitespace-pre-wrap">${escapeChatHtml(m.question)}</div>
+                        </div>
+                    </div>
+                    <div class="flex justify-start">
+                        <div class="max-w-[92%] bg-slate-900/80 border border-slate-800 rounded-xl rounded-bl-sm px-3 py-2">
+                            <div class="text-[9px] text-slate-500 uppercase font-semibold mb-1">Assistant</div>
+                            <div class="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">${escapeChatHtml(m.answer)}</div>
+                            <div id="feedback-${m.id}" class="mt-2">${feedbackHtml}</div>
+                        </div>
+                    </div>
+                `;
+                history.appendChild(card);
+            });
+            history.scrollTop = history.scrollHeight;
         }
 
-        async function loadChatHistory(sessionId) { if(!sessionId)return; try{const res=await fetch(`/api/sessions/${sessionId}/chat-history`),data=await res.json(); if(res.ok)renderChatHistory(data.messages||[]);}catch(err){console.error('Error loading chat history:',err);} }
-
-        function appendPendingChat(question) { const h=document.getElementById('chatHistory'), card=document.createElement('div'); card.id='pendingChatMessage'; card.className='space-y-2'; card.innerHTML=`<div class="flex justify-end"><div class="max-w-[88%] bg-indigo-600/15 border border-indigo-500/20 rounded-xl rounded-br-sm px-3 py-2"><div class="text-[9px] text-indigo-300 uppercase font-semibold mb-1">You</div><div class="text-xs text-slate-200 whitespace-pre-wrap">${escapeChatHtml(question)}</div></div></div><div class="flex justify-start"><div class="max-w-[92%] bg-slate-900/80 border border-slate-800 rounded-xl rounded-bl-sm px-3 py-2"><div class="text-[9px] text-slate-500 uppercase font-semibold mb-1">Assistant</div><div class="text-xs text-slate-500 italic">Thinking...</div></div></div>`; h.appendChild(card); h.scrollTop=h.scrollHeight; }
+        async function loadChatHistory(sessionId) {
+            const history = document.getElementById('chatHistory');
+            if (!sessionId) return;
+            try {
+                const res = await fetch(`/api/sessions/${sessionId}/chat-history`);
+                const data = await res.json();
+                if (res.ok) renderChatHistory(data.messages || []);
+            } catch (err) {
+                console.error('Error loading chat history:', err);
+            }
+        }
 
         async function askDocumentQuestion() {
-            if(!activeSessionId)return; const input=document.getElementById('chatQuestionInput'), question=input.value.trim(); if(!question){setChatStatus('Enter a question first.',true);return;}
-            const btn=document.getElementById('chatAskBtn'); btn.disabled=true; input.disabled=true; input.value=''; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Thinking...'; appendPendingChat(question); setChatStatus('Retrieving relevant document context and generating an answer...',false);
-            try{const res=await fetch(`/api/sessions/${activeSessionId}/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question})}),data=await res.json(); if(!res.ok){document.getElementById('pendingChatMessage')?.remove();setChatStatus(`Failed: ${data.detail||'Unknown error'}`,true);return;} currentChatMessageId=data.message_id; await loadChatHistory(activeSessionId); setChatStatus('Answer generated. Ask another question below.',false);}
-            catch(err){document.getElementById('pendingChatMessage')?.remove();setChatStatus(`Error calling chat: ${err.message}`,true);}
-            finally{btn.disabled=false;input.disabled=false;input.focus();btn.innerHTML='<i class="fa-solid fa-paper-plane"></i> Ask';}
+            if (!activeSessionId) return;
+            const input = document.getElementById('chatQuestionInput');
+            const question = input.value.trim();
+            if (!question) {
+                setChatStatus('Enter a question first.', true);
+                return;
+            }
+
+            const btn = document.getElementById('chatAskBtn');
+            const history = document.getElementById('chatHistory');
+
+            // Append the user's question immediately so the chat behaves like a
+            // normal conversation. The answer is added to this same history after
+            // the backend finishes; the user never has to erase the old question.
+            const pending = document.createElement('div');
+            pending.id = 'pending-chat-turn';
+            pending.className = 'space-y-2';
+            pending.innerHTML = `
+                <div class="flex justify-end">
+                    <div class="max-w-[88%] bg-indigo-600/15 border border-indigo-500/20 rounded-xl rounded-br-sm px-3 py-2">
+                        <div class="text-[9px] text-indigo-300 uppercase font-semibold mb-1">You</div>
+                        <div class="text-xs text-slate-200 whitespace-pre-wrap">${escapeChatHtml(question)}</div>
+                    </div>
+                </div>
+                <div class="flex justify-start">
+                    <div class="max-w-[92%] bg-slate-900/80 border border-slate-800 rounded-xl rounded-bl-sm px-3 py-2">
+                        <div class="text-[9px] text-slate-500 uppercase font-semibold mb-1">Assistant</div>
+                        <div class="text-xs text-slate-500 leading-relaxed"><i class="fa-solid fa-spinner fa-spin mr-1"></i> Thinking...</div>
+                    </div>
+                </div>`;
+            history.appendChild(pending);
+            history.scrollTop = history.scrollHeight;
+
+            input.value = '';
+            btn.disabled = true;
+            input.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Thinking...`;
+            setChatStatus('Retrieving relevant document context and generating an answer...', false);
+
+            try {
+                const res = await fetch(`/api/sessions/${activeSessionId}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    pending.remove();
+                    setChatStatus(`Failed: ${data.detail || 'Unknown error'}`, true);
+                    input.value = question;
+                    return;
+                }
+
+                // Replace the temporary turn with the authoritative DB version.
+                await loadChatHistory(activeSessionId);
+                document.getElementById('chatAnswerCard').classList.add('hidden');
+                document.getElementById('chatAnswerText').innerText = '';
+                document.getElementById('chatFeedbackStatus').innerText = '';
+                setChatStatus('Answer generated. Ask another question below.', false);
+                input.focus();
+            } catch (err) {
+                pending.remove();
+                input.value = question;
+                setChatStatus(`Error calling chat: ${err.message}`, true);
+            } finally {
+                btn.disabled = false;
+                input.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-paper-plane"></i> Ask`;
+            }
         }
 
-        async function submitHistoryFeedback(id,feedback){if(feedback==='no'){document.getElementById(`reason-${id}`)?.classList.remove('hidden');return;} await sendHistoryFeedback(id,'yes',null);}
-        async function submitHistoryNegativeReason(id,reason){reason=String(reason||'').trim();if(reason)await sendHistoryFeedback(id,'no',reason);}
-        async function sendHistoryFeedback(id,feedback,reason){try{const res=await fetch(`/api/chat/${id}/feedback`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feedback,reason})}),data=await res.json();if(!res.ok){setChatStatus(data.detail||'Could not save feedback.',true);return;}setChatStatus(feedback==='no'?'Feedback saved. Asking this question again will use the negative feedback to improve the answer.':'Feedback saved.',false);await loadChatHistory(activeSessionId);}catch(err){setChatStatus(`Error saving feedback: ${err.message}`,true);}}
+        function showMessageNegativeFeedback(messageId) {
+            const el = document.getElementById(`negative-feedback-${messageId}`);
+            if (el) el.classList.remove('hidden');
+        }
+
+        async function submitOtherMessageFeedback(messageId) {
+            const input = document.getElementById(`other-feedback-${messageId}`);
+            const reason = input ? input.value.trim() : '';
+            await submitMessageFeedback(messageId, 'no', reason || 'Other');
+        }
+
+        async function submitMessageFeedback(messageId, feedback, reason = null) {
+            try {
+                const res = await fetch(`/api/chat/${messageId}/feedback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ feedback, reason })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    setChatStatus(data.detail || 'Could not save feedback.', true);
+                    return;
+                }
+                await loadChatHistory(activeSessionId);
+                setChatStatus(
+                    feedback === 'yes'
+                        ? 'Feedback saved.'
+                        : 'Feedback saved — if this question is asked again, the previous negative feedback will be used to improve the answer.',
+                    false
+                );
+            } catch (err) {
+                setChatStatus(`Error saving feedback: ${err.message}`, true);
+            }
+        }
+
+        // Kept for compatibility with any existing HTML handlers.
+        async function submitChatFeedback(feedback) {
+            if (currentChatMessageId) await submitMessageFeedback(currentChatMessageId, feedback);
+        }
 
         async function approveGolden() {
             if (!activeSessionId) return;
