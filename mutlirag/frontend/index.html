@@ -74,6 +74,11 @@
   .ragas .g { color: #16a34a; }
   .ragas .y { color: #ca8a04; }
   .ragas .r { color: #dc2626; }
+  .calc-metrics { margin-top: 6px; font-size: 12px; padding: 5px 10px; border-radius: 8px;
+                  border: 1px solid var(--border); background: var(--panel2); color: var(--text);
+                  cursor: pointer; }
+  .calc-metrics:hover { border-color: var(--accent); }
+  .calc-metrics:disabled { opacity: .6; cursor: not-allowed; }
   .sources { margin-top: 8px; font-size: 13px; }
   .sources details { background: var(--panel2); border-radius: 8px; padding: 8px 12px; }
   .sources summary { cursor: pointer; color: var(--muted); }
@@ -331,11 +336,44 @@ function renderRagas(mt) {
   return d;
 }
 
+// A "Calculate Metrics" button — DeepEval no longer runs automatically after
+// an answer; clicking this is what triggers it (human-in-the-loop, since a
+// judge pass costs several LLM calls and can take many seconds).
+function renderCalcButton(messageId) {
+  const btn = document.createElement("button");
+  btn.className = "calc-metrics";
+  btn.textContent = "📊 Calculate Metrics";
+  btn.onclick = () => calculateMetrics(messageId, btn);
+  return btn;
+}
+
+async function calculateMetrics(messageId, btn) {
+  btn.disabled = true;
+  btn.textContent = "Calculating…";
+  try {
+    const resp = await api(`/chats/${state.currentId}/messages/${messageId}/metrics`, { method: "POST" });
+    const metrics = await resp.json();
+    const rag = renderRagas(metrics);
+    if (rag) {
+      btn.replaceWith(rag);
+    } else {
+      btn.disabled = false;
+      btn.textContent = "📊 Calculate Metrics";
+      toast("No metrics available for this answer.");
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "📊 Calculate Metrics";
+    toast("Metrics calculation failed: " + e.message);
+  }
+}
+
 function renderMessage(m) {
   const el = document.createElement("div");
   el.className = "msg " + m.role;
   el.innerHTML = `<div class="role">${m.role === "user" ? "🧑 You" : "🤖 Assistant"}</div>
                   <div class="bubble">${escapeHtml(m.content)}</div>`;
+  const hasContent = m.sources && m.sources.length; // excludes smalltalk/"I don't know"
   if (m.metrics) {
     const mt = m.metrics;
     const d = document.createElement("div");
@@ -344,8 +382,9 @@ function renderMessage(m) {
     el.appendChild(d);
     const rag = renderRagas(mt);
     if (rag) el.appendChild(rag);
+    else if (m.id && hasContent) el.appendChild(renderCalcButton(m.id));
   }
-  if (m.sources && m.sources.length) el.appendChild(renderSources(m.sources));
+  if (hasContent) el.appendChild(renderSources(m.sources));
   return el;
 }
 
@@ -503,17 +542,19 @@ async function ask() {
           answer += evt.text; bubble.textContent = answer;
           box.scrollTop = box.scrollHeight;
         } else if (evt.type === "done") {
+          const isDK = answer.toLowerCase().includes("don't know");
+          const hasContent = evt.sources && evt.sources.length && !isDK;
           if (evt.metrics) {
             const mt = evt.metrics;
             const d = document.createElement("div");
             d.className = "metrics";
             d.textContent = `⚡ Rewrite ${mt.rewrite_ms}ms · Search ${mt.search_ms}ms · TTFT ${mt.ttft_ms}ms · Gen ${mt.generation_ms}ms · Confidence ${mt.confidence_pct}%`;
             aEl.appendChild(d);
-            const rag = renderRagas(mt);
-            if (rag) aEl.appendChild(rag);
+            // DeepEval scores aren't computed yet at this point — show the
+            // button that triggers them on demand instead.
+            if (evt.message_id && hasContent) aEl.appendChild(renderCalcButton(evt.message_id));
           }
-          const isDK = answer.toLowerCase().includes("don't know");
-          if (evt.sources && evt.sources.length && !isDK) aEl.appendChild(renderSources(evt.sources));
+          if (hasContent) aEl.appendChild(renderSources(evt.sources));
         } else if (evt.type === "error") {
           bubble.innerHTML += `<div style="color:var(--err)">⚠️ ${escapeHtml(evt.message)}</div>`;
         }

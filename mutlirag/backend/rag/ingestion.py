@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from dataclasses import dataclass, field
 
 import config
@@ -26,6 +27,55 @@ class Document:
 # structure (headings/titles) instead of blindly packing by character count.
 # Null bytes never occur in extracted text, so this can't collide with content.
 HEADING_MARK = "\x00H\x00"
+
+# A bare page number on its own line ("47"), or a numbered TOC-entry line
+# ("4.4 Experience Exercise: Worst and Best") — PDF text extraction commonly
+# splits a dot-leader TOC entry's title and page number onto separate lines,
+# so counting either shape catches both layouts.
+#
+# Two alternatives for the entry shape:
+#   1. Dotted sub-level numbering ("4.4", "4.10", "1.2.3") followed by either
+#      a space or (seen on real documents — font/kerning during PDF text
+#      extraction can drop the space entirely) directly by a capital letter,
+#      e.g. "4.4Need to Know: Three Typical Problem Solving Mistakes". The
+#      dotted prefix is specific enough on its own that skipping the space
+#      check here doesn't risk matching ordinary prose.
+#   2. Bare top-level numbering ("1", "23") followed by a REQUIRED space —
+#      kept strict (unlike the dotted case) so an ordinary numbered list like
+#      "1. Introduction to the topic..." is never mistaken for a TOC entry;
+#      the required space also excludes the "1." + space form, which is that
+#      exact ordinary-list style.
+_TOC_PAGENUM_RE = re.compile(r"^\d{1,4}$")
+_TOC_ENTRY_RE = re.compile(r"^\d+\.\d+(?:\.\d+)*(?:\s+\S|[A-Z])|^\d+\s+\S")
+
+
+def _looks_like_toc(text: str) -> bool:
+    """True when a page is a table of contents / section index, not real
+    content — retrieved anyway, it's dense with the same keywords/phrases as
+    real content elsewhere in the document (verbatim exercise/lesson titles),
+    which fools both BM25 and even a cross-encoder reranker into ranking it
+    highly despite having zero explanatory value. Real content pages rarely
+    have more than one or two lines matching either shape above; a TOC/index
+    page is made almost entirely of them. Validated against real ingested
+    pages: true positive on an actual TOC page (ratio 0.92), true negatives
+    on several real content pages, including one with numbered list items
+    (ratio <= 0.10 in every case) — 0.5 cleanly separates the two.
+    """
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if len(lines) < 6:
+        return False
+    toc_like = sum(1 for l in lines if _TOC_PAGENUM_RE.match(l) or _TOC_ENTRY_RE.match(l))
+    return toc_like / len(lines) >= 0.5
+
+
+def chunk_type(meta: dict) -> str:
+    """"toc" for a page/chunk flagged TOC/index at ingestion (is_index, or
+    the forward-compat is_toc alias — see vectorstore._is_toc), else
+    "content". Same underlying signal as those boolean keys, kept alongside
+    them (not instead of) as a plain string field that's easier to read in
+    diagnostics/logs and to filter/group on directly.
+    """
+    return "toc" if bool(meta.get("is_index") or meta.get("is_toc")) else "content"
 
 
 def mark_heading(text: str) -> str:
@@ -162,6 +212,44 @@ def _extract_pdf_text_with_headings(page) -> str:
         return page.get_text("text").strip()
 
 
+def _repeated_boilerplate_lines(pdf) -> set[str]:
+    """Lines (whitespace/case-normalized) appearing identically on at least
+    config.HEADER_FOOTER_MIN_PAGES distinct pages of this PDF — see
+    config.STRIP_REPEATED_HEADERS_FOOTERS.
+
+    A cheap text-only pre-pass (page.get_text("text"), no heading detection,
+    no image/OCR work) purely to build the frequency table before the real
+    per-page extraction loop in load_pdf runs.
+    """
+    counts: dict[str, int] = {}
+    for page in pdf:
+        seen_this_page: set[str] = set()
+        for line in page.get_text("text").split("\n"):
+            norm = re.sub(r"\s+", " ", line.strip()).lower()
+            if len(norm) < config.HEADER_FOOTER_MIN_LINE_CHARS or norm in seen_this_page:
+                continue  # a line repeated within the SAME page shouldn't inflate its page count
+            seen_this_page.add(norm)
+            counts[norm] = counts.get(norm, 0) + 1
+    return {line for line, c in counts.items() if c >= config.HEADER_FOOTER_MIN_PAGES}
+
+
+def _strip_boilerplate_lines(text: str, boilerplate: set[str]) -> str:
+    """Drop any line of `text` that's in `boilerplate`, ignoring the
+    HEADING_MARK sentinel when comparing so a font-size-detected heading
+    that happens to BE a recurring banner still gets caught.
+    """
+    if not boilerplate:
+        return text
+    kept = []
+    for line in text.split("\n"):
+        body = line[len(HEADING_MARK):] if line.startswith(HEADING_MARK) else line
+        norm = re.sub(r"\s+", " ", body.strip()).lower()
+        if norm in boilerplate:
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def load_pdf(file_bytes: bytes, filename: str, progress_callback=None) -> list[Document]:
     """Extract each PDF page as one Document, combining BOTH sources of text:
 
@@ -184,28 +272,55 @@ def load_pdf(file_bytes: bytes, filename: str, progress_callback=None) -> list[D
     pdf = fitz.open(stream=file_bytes, filetype="pdf")
     total_pages = len(pdf)
 
+    boilerplate_lines = (
+        _repeated_boilerplate_lines(pdf) if config.STRIP_REPEATED_HEADERS_FOOTERS else set()
+    )
+
     for page_num, page in enumerate(pdf, 1):
         if progress_callback:
             progress_callback(page_num, total_pages, f"Parsing PDF page {page_num} of {total_pages}")
         text = _extract_pdf_text_with_headings(page)
 
-        # --- OCR + save every embedded image on this page ---
+        embedded = page.get_images(full=True)
         image_texts: list[str] = []
         saved_paths: list[str] = []
-        for img_i, img in enumerate(page.get_images(full=True), 1):
-            xref = img[0]
-            saved, ocr_text = _handle_embedded_image(pdf, xref, stem, page_num, img_i)
-            if saved:
-                saved_paths.append(saved)
-            if ocr_text:
-                image_texts.append(f"[Embedded image {img_i}] {ocr_text}")
-
-        # --- fully-scanned page fallback: no text AND no embedded images ---
         rendered_ocr = ""
-        if len(text) < config.PDF_OCR_MIN_CHARS and not image_texts:
+
+        if len(embedded) > config.MAX_EMBEDDED_IMAGES_PER_PAGE:
+            # A page with this many separate embedded images is almost always
+            # one complex diagram/collage sliced into many raster tiles by
+            # whatever exported this PDF, not N independently meaningful
+            # photos — describing each fragment individually is both slow
+            # (every image is its own vision call, config.VISION_MIN_INTERVAL
+            # apart — hundreds of images on one page can add many minutes to
+            # a single page) and produces noisy, disjointed per-fragment
+            # descriptions instead of one coherent one. Render the whole page
+            # once instead, same as the fully-scanned-page fallback below.
             rendered_ocr = _ocr_pdf_page(page)
+        else:
+            # --- OCR + save every embedded image on this page ---
+            for img_i, img in enumerate(embedded, 1):
+                xref = img[0]
+                saved, ocr_text = _handle_embedded_image(pdf, xref, stem, page_num, img_i)
+                if saved:
+                    saved_paths.append(saved)
+                if ocr_text:
+                    image_texts.append(f"[Embedded image {img_i}] {ocr_text}")
+
+            # --- fully-scanned page fallback: no text AND no embedded images ---
+            if len(text) < config.PDF_OCR_MIN_CHARS and not image_texts:
+                rendered_ocr = _ocr_pdf_page(page)
 
         combined = "\n".join(p for p in [text, *image_texts, rendered_ocr] if p).strip()
+        if boilerplate_lines:
+            # Applied to the COMBINED text (not just the text layer) so a
+            # banner re-captured via OCR on a scanned page gets stripped
+            # too. Deliberately after the OCR-fallback decision above,
+            # which uses the un-stripped `text` — otherwise a page that's
+            # ENTIRELY boilerplate would look text-sparse post-strip and
+            # trigger a full-page OCR that just re-introduces the same
+            # banner text via the image render.
+            combined = _strip_boilerplate_lines(combined, boilerplate_lines)
         if not combined:
             # The page has image(s) but we got no text from them (OCR empty and
             # the vision model was unavailable/rate-limited). Keep a placeholder
@@ -225,7 +340,12 @@ def load_pdf(file_bytes: bytes, filename: str, progress_callback=None) -> list[D
                 text=combined,
                 source=filename,
                 kind="pdf",
-                meta={"page": page_num, "ocr": used_ocr, "images": saved_paths},
+                meta={
+                    "page": page_num,
+                    "ocr": used_ocr,
+                    "images": saved_paths,
+                    "is_index": _looks_like_toc(text),
+                },
             )
         )
 

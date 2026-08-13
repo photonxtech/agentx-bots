@@ -41,7 +41,13 @@ import config
 import db
 from rag import generator, langsmith_logging
 from api import schemas
-from api.service import ChatNotFoundError, NoDocumentError, RagService, smalltalk_reply
+from api.service import (
+    ChatNotFoundError,
+    MessageNotFoundError,
+    NoDocumentError,
+    RagService,
+    smalltalk_reply,
+)
 
 # The frontend lives OUTSIDE the backend, at <project root>/frontend. config.BASE_DIR
 # is the project root (parent of backend/), so this resolves regardless of cwd.
@@ -245,6 +251,7 @@ def ask(chat_id: str, body: schemas.AskRequest):
             "metrics": None,
         }
 
+    ls_run_id = langsmith_logging.start_chat_turn(chat_id, body.question)
     try:
         r = s.retrieve(chat_id, body.question, history)
     except NoDocumentError:
@@ -253,15 +260,53 @@ def ask(chat_id: str, body: schemas.AskRequest):
             detail="Upload a file for this chat first — each chat answers only "
                    "from its own document.",
         )
+    contexts = [] if r.get("direct_answer") else generator.context_texts(r["hits"])
+    raw_contexts = [doc.text for doc, _ in r["raw_hits"] if doc.text]
+    langsmith_logging.log_retrieval(
+        ls_run_id, r["search_query"], raw_contexts, r["search_ms"], contexts, r["rerank_ms"],
+        diagnostics=r.get("retrieval_diagnostics"),
+    )
 
     s.append_user_message(chat_id, body.question)
+
+    # TOC_QUERY/PAGE_QUERY with nothing matched (no TOC detected / page not
+    # found) -> answer directly with a clear message, no LLM call, so an
+    # empty context never gets a chance to be hallucinated over.
+    if r.get("direct_answer"):
+        answer_text = r["direct_answer"]
+        metrics = {
+            "rewrite_ms": r["rewrite_ms"],
+            "search_ms": r["search_ms"],
+            "ttft_ms": 0,
+            "generation_ms": 0,
+            "confidence_pct": r["confidence_pct"],
+        }
+        ls_run_id_str = str(ls_run_id.id) if ls_run_id else None
+        message_id = s.append_assistant_message(
+            chat_id, answer_text, r["sources"], metrics,
+            question=body.question, contexts=contexts, langsmith_run_id=ls_run_id_str,
+        )
+        db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics, message_id=message_id)
+        langsmith_logging.end_chat_turn(ls_run_id, answer_text, contexts, metrics)
+        return {
+            "chat_id": chat_id,
+            "question": body.question,
+            "search_query": r["search_query"],
+            "answer": answer_text,
+            "sources": r["sources"],
+            "metrics": metrics,
+            "message_id": message_id,
+        }
 
     # Generate (collect the full stream server-side for the JSON response).
     t_gen = time.perf_counter()
     ttft = None
     parts: list[str] = []
     try:
-        for delta in s.answer_stream(r["search_query"], r["hits"], original_question=body.question):
+        for delta in s.answer_stream(
+            r["search_query"], r["hits"], original_question=body.question,
+            verified_context=r["query_type"] != "NORMAL_QUERY",
+        ):
             if ttft is None:
                 ttft = time.perf_counter() - t_gen
             parts.append(delta)
@@ -270,23 +315,28 @@ def ask(chat_id: str, body: schemas.AskRequest):
 
     answer_text = "".join(parts)
     generation_ms = int((time.perf_counter() - t_gen) * 1000)
+    ttft_ms = int((ttft or 0) * 1000)
     metrics = {
         "rewrite_ms": r["rewrite_ms"],
         "search_ms": r["search_ms"],
-        "ttft_ms": int((ttft or 0) * 1000),
+        "ttft_ms": ttft_ms,
         "generation_ms": generation_ms,
         "confidence_pct": r["confidence_pct"],
     }
+    # DeepEval/RAGAS scores are NOT computed here — human-in-the-loop: the UI
+    # shows a "Calculate Metrics" button after the answer, and only clicking
+    # it hits POST /chats/{chat_id}/messages/{message_id}/metrics below.
 
-    # Reference-free RAGAS scores (faithfulness / relevancy / context precision / context relevancy).
-    ragas = s.evaluate_answer(body.question, answer_text, r["hits"])
-    if ragas:
-        metrics.update(ragas)
-
-    s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
-    db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics)
-    contexts = [doc.text for doc, _ in r["hits"] if doc.text]
-    langsmith_logging.log_chat_turn(chat_id, body.question, answer_text, contexts, metrics)
+    ls_run_id_str = str(ls_run_id.id) if ls_run_id else None
+    message_id = s.append_assistant_message(
+        chat_id, answer_text, r["sources"], metrics,
+        question=body.question, contexts=contexts, langsmith_run_id=ls_run_id_str,
+    )
+    db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics, message_id=message_id)
+    langsmith_logging.log_generation(
+        ls_run_id, config.DEFAULT_MODEL, r["search_query"], answer_text, ttft_ms, generation_ms
+    )
+    langsmith_logging.end_chat_turn(ls_run_id, answer_text, contexts, metrics)
 
     return {
         "chat_id": chat_id,
@@ -295,6 +345,7 @@ def ask(chat_id: str, body: schemas.AskRequest):
         "answer": answer_text,
         "sources": r["sources"],
         "metrics": metrics,
+        "message_id": message_id,
     }
 
 
@@ -339,6 +390,7 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    ls_run_id = langsmith_logging.start_chat_turn(chat_id, body.question)
     try:
         r = s.retrieve(chat_id, body.question, history)
     except NoDocumentError:
@@ -347,8 +399,46 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
             detail="Upload a file for this chat first — each chat answers only "
                    "from its own document.",
         )
+    contexts = [] if r.get("direct_answer") else generator.context_texts(r["hits"])
+    raw_contexts = [doc.text for doc, _ in r["raw_hits"] if doc.text]
+    langsmith_logging.log_retrieval(
+        ls_run_id, r["search_query"], raw_contexts, r["search_ms"], contexts, r["rerank_ms"],
+        diagnostics=r.get("retrieval_diagnostics"),
+    )
 
     s.append_user_message(chat_id, body.question)
+
+    # TOC_QUERY/PAGE_QUERY with nothing matched -> stream the clear "not
+    # found" message directly, no LLM call, same reasoning as the non-
+    # streaming endpoint above.
+    if r.get("direct_answer"):
+        answer_text = r["direct_answer"]
+
+        def direct_stream():
+            yield sse({"type": "meta", "search_query": r["search_query"]})
+            for word in answer_text.split(" "):
+                yield sse({"type": "token", "text": word + " "})
+            metrics = {
+                "rewrite_ms": r["rewrite_ms"],
+                "search_ms": r["search_ms"],
+                "ttft_ms": 0,
+                "generation_ms": 0,
+                "confidence_pct": r["confidence_pct"],
+            }
+            ls_run_id_str = str(ls_run_id.id) if ls_run_id else None
+            message_id = s.append_assistant_message(
+                chat_id, answer_text, r["sources"], metrics,
+                question=body.question, contexts=contexts, langsmith_run_id=ls_run_id_str,
+            )
+            db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics, message_id=message_id)
+            langsmith_logging.end_chat_turn(ls_run_id, answer_text, contexts, metrics)
+            yield sse({"type": "done", "metrics": metrics, "sources": r["sources"], "message_id": message_id})
+
+        return StreamingResponse(
+            direct_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     def event_stream():
         yield sse({"type": "meta", "search_query": r["search_query"]})
@@ -357,7 +447,10 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
         ttft = None
         parts: list[str] = []
         try:
-            for delta in s.answer_stream(r["search_query"], r["hits"], original_question=body.question):
+            for delta in s.answer_stream(
+            r["search_query"], r["hits"], original_question=body.question,
+            verified_context=r["query_type"] != "NORMAL_QUERY",
+        ):
                 if ttft is None:
                     ttft = time.perf_counter() - t_gen
                 parts.append(delta)
@@ -367,30 +460,57 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
             return
 
         answer_text = "".join(parts)
+        ttft_ms = int((ttft or 0) * 1000)
+        generation_ms = int((time.perf_counter() - t_gen) * 1000)
         metrics = {
             "rewrite_ms": r["rewrite_ms"],
             "search_ms": r["search_ms"],
-            "ttft_ms": int((ttft or 0) * 1000),
-            "generation_ms": int((time.perf_counter() - t_gen) * 1000),
+            "ttft_ms": ttft_ms,
+            "generation_ms": generation_ms,
             "confidence_pct": r["confidence_pct"],
         }
-        # Reference-free RAGAS scores, computed AFTER the last token so the live
-        # typing effect is never delayed by the extra judge calls.
-        ragas = s.evaluate_answer(body.question, answer_text, r["hits"])
-        if ragas:
-            metrics.update(ragas)
+        # DeepEval/RAGAS scores are NOT computed here — human-in-the-loop: the
+        # UI shows a "Calculate Metrics" button after the answer, and only
+        # clicking it hits POST /chats/{chat_id}/messages/{message_id}/metrics.
         # Persist the assistant turn only after the full answer is produced.
-        s.append_assistant_message(chat_id, answer_text, r["sources"], metrics)
-        db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics)
-        contexts = [doc.text for doc, _ in r["hits"] if doc.text]
-        langsmith_logging.log_chat_turn(chat_id, body.question, answer_text, contexts, metrics)
-        yield sse({"type": "done", "metrics": metrics, "sources": r["sources"]})
+        ls_run_id_str = str(ls_run_id.id) if ls_run_id else None
+        message_id = s.append_assistant_message(
+            chat_id, answer_text, r["sources"], metrics,
+            question=body.question, contexts=contexts, langsmith_run_id=ls_run_id_str,
+        )
+        db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics, message_id=message_id)
+        langsmith_logging.log_generation(
+            ls_run_id, config.DEFAULT_MODEL, r["search_query"], answer_text, ttft_ms, generation_ms
+        )
+        langsmith_logging.end_chat_turn(ls_run_id, answer_text, contexts, metrics)
+        yield sse({"type": "done", "metrics": metrics, "sources": r["sources"], "message_id": message_id})
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Metrics — computed on demand ("Calculate Metrics" button), not automatically
+# at answer time. Scores against the same parent-chunk context the answer was
+# actually generated from (persisted on the message, see RagService.
+# append_assistant_message), and back-fills Postgres + LangSmith feedback.
+# --------------------------------------------------------------------------- #
+@app.post(
+    "/chats/{chat_id}/messages/{message_id}/metrics",
+    response_model=schemas.Metrics,
+    tags=["ask"],
+)
+def calculate_metrics(chat_id: str, message_id: str):
+    try:
+        metrics = svc().evaluate_message(chat_id, message_id)
+    except ChatNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Chat {chat_id} not found.")
+    except MessageNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Message {message_id} not found in this chat.")
+    return metrics
 
 
 # --------------------------------------------------------------------------- #

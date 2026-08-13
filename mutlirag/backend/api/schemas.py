@@ -18,6 +18,11 @@ class CreateChatRequest(BaseModel):
 
 
 class Message(BaseModel):
+    id: str | None = Field(
+        default=None,
+        description="Stable id for this message. Assistant messages use it to "
+        "target POST /chats/{chat_id}/messages/{message_id}/metrics.",
+    )
     role: str
     content: str
     sources: list["SourceChunk"] = Field(default_factory=list)
@@ -102,6 +107,11 @@ class AskResponse(BaseModel):
     sources: list[SourceChunk] = Field(default_factory=list)
     is_smalltalk: bool = Field(default=False, description="True if answered as a greeting, not via RAG.")
     metrics: Metrics | None = None
+    message_id: str | None = Field(
+        default=None,
+        description="Target for POST /chats/{chat_id}/messages/{message_id}/metrics "
+        "to compute DeepEval scores on demand. None for smalltalk replies.",
+    )
 
 
 # --------------------------------------------------------------------------- #

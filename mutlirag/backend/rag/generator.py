@@ -19,9 +19,19 @@ SYSTEM_PROMPT = (
     "You are a helpful assistant for question-answering over the user's own "
     "documents (spreadsheets, PDFs, presentations, and scanned/photographed "
     "images). Answer using the provided context. "
-    "For broad questions like 'what does this document contain', 'give an overview', "
-    "or 'summarize', synthesize a helpful answer from ALL the retrieved context chunks "
-    "even if no single chunk perfectly answers the question. "
+    "For a normal, specific question, answer only what was asked — do not pad "
+    "the response with tangential material from other retrieved chunks just "
+    "because it was in the context. "
+    "For explicitly broad questions like 'what does this document contain', "
+    "'give an overview', or 'summarize', synthesize across ALL the retrieved "
+    "context chunks even if no single chunk perfectly answers the question. "
+    "Questions like 'what is on page X', 'what does page X say', or "
+    "'summarize page X' have ALREADY been resolved to the exact page by the "
+    "retrieval system before you see the context — treat them the same as a "
+    "broad/overview question and describe everything relevant in the "
+    "provided context. Do not refuse just because the context text itself "
+    "doesn't literally repeat the page number back to you — the retrieval "
+    "system already guarantees the context IS that page's content. "
     "Only respond with: \"I don't know. Please ask a question related to the uploaded documents.\" "
     "when the context is completely empty or entirely unrelated to the question — "
     "never refuse when relevant context chunks are present. "
@@ -122,11 +132,35 @@ def rewrite_query(question: str, history: list[dict]) -> str:
 _HEADER_RE = re.compile(r"^\[(PDF|File|Image|DOCX|PPTX):[^\]]+\]\n?", re.MULTILINE)
 
 
+def context_texts(hits: list[tuple[Document, float]]) -> list[str]:
+    """Resolve each hit to its PARENT chunk text, deduplicated.
+
+    rag.chunking indexes small CHILD chunks for precise retrieval, but
+    generation and DeepEval evaluation should see the larger PARENT chunk each
+    child belongs to (meta["parent_text"]) — not the narrow snippet that
+    happened to match. Several retrieved children can share the same parent
+    (adjacent chunks of one section), so parents are deduplicated here, first
+    (highest-ranked) occurrence wins, or every hit would otherwise repeat the
+    same text and waste context budget. Chunks indexed before parent-child
+    chunking existed have no parent_text and fall back to their own text.
+    """
+    seen: set[str] = set()
+    texts: list[str] = []
+    for doc, _ in hits:
+        text = doc.meta.get("parent_text") or doc.text
+        if text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    return texts
+
+
 def build_context(hits: list[tuple[Document, float]]) -> str:
-    """Format retrieved chunks into a numbered context block for the prompt, omitting filenames, page numbers, and scores."""
+    """Format retrieved chunks' parent text into a numbered context block for
+    the prompt, omitting filenames, page numbers, and scores."""
     blocks = []
-    for i, (doc, score) in enumerate(hits, 1):
-        clean_text = _HEADER_RE.sub("", doc.text).strip()
+    for i, text in enumerate(context_texts(hits), 1):
+        clean_text = _HEADER_RE.sub("", text).strip()
         blocks.append(f"[{i}]\n{clean_text}")
     return "\n\n".join(blocks)
 
@@ -137,13 +171,31 @@ def answer(
     model: str = config.DEFAULT_MODEL,
     temperature: float = config.DEFAULT_TEMPERATURE,
     original_question: str | None = None,
+    verified_context: bool = False,
 ):
     """Stream an answer from Groq, grounded in the retrieved context.
+
+    `verified_context` — set for PAGE_QUERY/TOC_QUERY (see
+    rag.query_intent), where `hits` were pulled deterministically by page
+    metadata rather than by semantic search. Without this, a model asked
+    "what's on page 247" but shown context with no literal "page 247" text
+    in it tends to hedge ("there is no content from page 247 in the
+    context") even though the retrieval system already guarantees the
+    context IS that page — confirmed live: the SYSTEM_PROMPT rule alone
+    wasn't enough to stop this, since nothing next to the context itself
+    asserted it. Asserting it directly above the context (not just in the
+    system prompt) is what actually changes the model's behavior.
 
     Yields text deltas so the UI can render the answer live.
     """
     context = build_context(hits) or "(no context retrieved)"
-    
+    if verified_context:
+        context = (
+            "(The following is the verified, exact content of the requested "
+            "page(s)/section — already resolved by the retrieval system, "
+            "not a search result to be second-guessed.)\n\n" + context
+        )
+
     q_text = f"Question: {original_question}\n(Search topic: {question})" if original_question and original_question != question else f"Question: {question}"
 
     user_prompt = (

@@ -23,7 +23,12 @@
       "Bash(curl -s -m 5 \"http://localhost:8010/qa-logs?limit=5\")",
       "Bash(python -m py_compile config.py rag/reranker.py api/service.py scripts/run_ragas_eval.py)",
       "Bash(python -m py_compile scripts/run_langsmith_eval.py)",
-      "PowerShell(pip install langsmith)"
+      "PowerShell(pip install langsmith)",
+      "Bash(timeout 40 /c/agentx-bots/mutlirag/.venv/Scripts/python.exe -u -c ' *)",
+      "Bash(./.venv/Scripts/python.exe -m pytest backend/tests -v)",
+      "Bash(./.venv/Scripts/python.exe -m py_compile backend/api/main.py backend/api/service.py backend/rag/vectorstore.py backend/rag/query_intent.py backend/config.py)",
+      "Bash(git status *)",
+      "Bash(./.venv/Scripts/python.exe -m py_compile backend/rag/chunking.py backend/config.py)"
     ]
   }
 }

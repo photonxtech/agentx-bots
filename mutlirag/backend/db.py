@@ -30,6 +30,7 @@ _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS qa_logs (
     id BIGSERIAL PRIMARY KEY,
     chat_id TEXT NOT NULL,
+    message_id TEXT,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     sources JSONB,
@@ -41,8 +42,10 @@ CREATE TABLE IF NOT EXISTS qa_logs (
     answer_correctness DOUBLE PRECISION,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE qa_logs ADD COLUMN IF NOT EXISTS message_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_qa_logs_chat_id ON qa_logs (chat_id);
 CREATE INDEX IF NOT EXISTS idx_qa_logs_created_at ON qa_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_qa_logs_message_id ON qa_logs (message_id);
 """
 
 
@@ -80,11 +83,20 @@ def close() -> None:
         _pool = None
 
 
-def log_qa(chat_id: str, question: str, answer: str, sources: list[dict], metrics: dict | None) -> None:
-    """Insert one answered turn + its 6 RAGAS-style metrics. Never raises.
+def log_qa(
+    chat_id: str,
+    question: str,
+    answer: str,
+    sources: list[dict],
+    metrics: dict | None,
+    message_id: str | None = None,
+) -> None:
+    """Insert one answered turn. Never raises.
 
-    Metrics not yet computed for this turn (e.g. context_recall/
-    answer_correctness when there's no golden-set match) are stored as NULL.
+    DeepEval/RAGAS scores are no longer computed at answer time (see
+    api.service.RagService.evaluate_message) — they're all NULL here and
+    filled in later by update_qa_metrics(), keyed on message_id, whenever the
+    user clicks "Calculate Metrics" (or stay NULL forever if they never do).
     """
     if _pool is None:
         return
@@ -96,13 +108,13 @@ def log_qa(chat_id: str, question: str, answer: str, sources: list[dict], metric
                 cur.execute(
                     """
                     INSERT INTO qa_logs (
-                        chat_id, question, answer, sources,
+                        chat_id, message_id, question, answer, sources,
                         faithfulness, answer_relevancy, context_precision,
                         context_relevancy, context_recall, answer_correctness
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        chat_id, question, answer, Json(sources or []),
+                        chat_id, message_id, question, answer, Json(sources or []),
                         metrics.get("faithfulness"),
                         metrics.get("answer_relevancy"),
                         metrics.get("context_precision"),
@@ -116,6 +128,42 @@ def log_qa(chat_id: str, question: str, answer: str, sources: list[dict], metric
             _pool.putconn(conn)
     except Exception:
         logger.exception("Failed to log Q&A turn to Postgres (chat_id=%s)", chat_id)
+
+
+def update_qa_metrics(message_id: str, metrics: dict | None) -> None:
+    """Fill in the 6 RAGAS/DeepEval scores for an already-logged turn, once
+    the user clicks "Calculate Metrics". No-op if message_id wasn't logged
+    (e.g. Postgres was down at answer time) — never raises."""
+    if _pool is None or not message_id:
+        return
+    metrics = metrics or {}
+    try:
+        conn = _pool.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qa_logs SET
+                        faithfulness = %s, answer_relevancy = %s,
+                        context_precision = %s, context_relevancy = %s,
+                        context_recall = %s, answer_correctness = %s
+                    WHERE message_id = %s
+                    """,
+                    (
+                        metrics.get("faithfulness"),
+                        metrics.get("answer_relevancy"),
+                        metrics.get("context_precision"),
+                        metrics.get("context_relevancy"),
+                        metrics.get("context_recall"),
+                        metrics.get("answer_correctness"),
+                        message_id,
+                    ),
+                )
+            conn.commit()
+        finally:
+            _pool.putconn(conn)
+    except Exception:
+        logger.exception("Failed to update Q&A metrics in Postgres (message_id=%s)", message_id)
 
 
 def fetch_qa_logs(chat_id: str | None = None, limit: int = 100) -> list[dict]:

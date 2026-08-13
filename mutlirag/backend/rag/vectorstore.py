@@ -39,6 +39,18 @@ def _tokenize(text: str) -> list[str]:
     return _token_re.findall(text.lower())
 
 
+def _is_toc(meta: dict) -> bool:
+    """True when a chunk's page was flagged TOC/index at ingestion.
+
+    Checks both the current `is_index` key (see ingestion._looks_like_toc)
+    and a possible future `is_toc` key, so a metadata rename never has to
+    touch this logic again. Missing on both (pre-existing indexed chunks) ->
+    False, i.e. treated as ordinary content — never crashes, just requires
+    re-ingestion to get accurate TOC tagging.
+    """
+    return bool(meta.get("is_index") or meta.get("is_toc"))
+
+
 # --------------------------------------------------------------------------- #
 # Shared search / scoring logic
 # --------------------------------------------------------------------------- #
@@ -64,12 +76,24 @@ class _BaseStore:
 
     # -- search (identical for every backend) -- #
     def search(
-        self, query: str, top_k: int = 5, chat_id: str | None = None
-    ) -> list[tuple[Document, float]]:
+        self,
+        query: str,
+        top_k: int = 5,
+        chat_id: str | None = None,
+        explain: bool = False,
+    ) -> list[tuple[Document, float]] | list[dict]:
         """Return the top_k (Document, blended score) pairs for a query.
 
         When `chat_id` is given, only chunks belonging to that chat are
         considered — so a chat can never retrieve another chat's document.
+
+        `explain=True` returns the same top_k selection, but as
+        `[{"doc":, "score":, "dense":, "bm25":}, ...]` dicts exposing the two
+        raw signals `score` (the fused hybrid score) is blended from —
+        for retrieval diagnostics (see RagService._log_retrieval_diagnostics)
+        without a second, separately-computed call: dense/bm25 are already
+        sitting right here either way, this just exposes them instead of
+        discarding them.
         """
         if not self.documents:
             return []
@@ -87,11 +111,42 @@ class _BaseStore:
         fused = alpha * sims + (1.0 - alpha) * bm
 
         # Per-chat isolation: mask out every chunk not owned by this chat.
+        # TOC/index-page exclusion: same mechanism, ANDed in — those pages are
+        # pure noise (see ingestion._looks_like_toc), never worth retrieving
+        # regardless of chat.
+        mask = None
         if chat_id is not None:
             mask = np.array(
                 [d.meta.get("chat_id") == chat_id for d in self.documents],
                 dtype=bool,
             )
+        if config.EXCLUDE_INDEX_PAGES:
+            not_index = np.array(
+                [not _is_toc(d.meta) for d in self.documents], dtype=bool
+            )
+            mask = not_index if mask is None else (mask & not_index)
+
+        # Dedup: exact-duplicate chunk text (same page/content indexed more
+        # than once — e.g. a file re-uploaded to a chat before
+        # RagService.ingest_file started replacing the previous one, or a
+        # retried upload request) must not occupy more than one of the final
+        # top_k slots. Scoped to this chat only — two DIFFERENT chats sharing
+        # identical boilerplate text (e.g. the same template document) is not
+        # a bug, so it's left alone. Only the first occurrence (by
+        # self.documents' order — oldest-indexed first) survives; the rest
+        # get masked out here, same as any other excluded chunk.
+        seen_texts: set[str] = set()
+        dedupe_mask = np.ones(len(self.documents), dtype=bool)
+        for i, d in enumerate(self.documents):
+            if chat_id is not None and d.meta.get("chat_id") != chat_id:
+                continue
+            if d.text in seen_texts:
+                dedupe_mask[i] = False
+            else:
+                seen_texts.add(d.text)
+        mask = dedupe_mask if mask is None else (mask & dedupe_mask)
+
+        if mask is not None:
             if not mask.any():
                 return []
             fused = np.where(mask, fused, -np.inf)
@@ -101,11 +156,124 @@ class _BaseStore:
 
         k = min(top_k, limit)
         idxs = np.argsort(-fused)[:k]
-        return [
-            (self.documents[i], float(fused[i]))
-            for i in idxs
-            if np.isfinite(fused[i])
+        idxs = [i for i in idxs if np.isfinite(fused[i])]
+        if explain:
+            return [
+                {
+                    "doc": self.documents[i],
+                    "score": float(fused[i]),
+                    "dense": float(sims[i]),
+                    "bm25": float(bm[i]),
+                }
+                for i in idxs
+            ]
+        return [(self.documents[i], float(fused[i])) for i in idxs]
+
+    # -- deterministic, metadata-only retrieval (TOC / page requests) -- #
+    # A structural request ("give me the TOC", "what's on page 247") is not a
+    # semantic-similarity question — answering it via embedding/BM25 search
+    # risks missing pages whose wording doesn't score highly, or returning
+    # only one of several TOC pages. These filter self.documents directly
+    # (same in-memory list search() uses) and always bypass the TOC exclusion
+    # mask above: an explicit request for the TOC or a specific page wins
+    # over the generic "TOC is noise" rule that mask encodes.
+    def _sort_key(self, d: Document):
+        m = d.meta
+        return (m.get("page") or 0, m.get("chunk") or 0, m.get("child") or 0)
+
+    @staticmethod
+    def _dedupe_by_text(docs: list[Document]) -> list[Document]:
+        """Drop exact-duplicate chunk text, keeping the first occurrence.
+
+        Same reasoning as search()'s dedupe_mask: a page/chunk indexed more
+        than once (duplicate upload, retried request) must not show up twice
+        in a TOC or page-request answer either.
+        """
+        seen: set[str] = set()
+        out: list[Document] = []
+        for d in docs:
+            if d.text in seen:
+                continue
+            seen.add(d.text)
+            out.append(d)
+        return out
+
+    def get_toc_chunks(self, chat_id: str | None = None) -> list[Document]:
+        """Every chunk from a page flagged TOC/index, in page order,
+        deduplicated.
+
+        Chat-isolated exactly like search(): when `chat_id` is given, only
+        that chat's chunks are considered, so TOC retrieval can never leak
+        another chat's document.
+        """
+        matched = [
+            d for d in self.documents
+            if _is_toc(d.meta) and (chat_id is None or d.meta.get("chat_id") == chat_id)
         ]
+        return self._dedupe_by_text(sorted(matched, key=self._sort_key))
+
+    def get_by_pages(self, pages, chat_id: str | None = None) -> list[Document]:
+        """Every chunk belonging to one of `pages`, in page order,
+        deduplicated — regardless of is_index, since an explicit page
+        request always wins over the generic TOC-exclusion rule.
+        Chat-isolated like search()/get_toc_chunks.
+        """
+        wanted = set(pages)
+        matched = [
+            d for d in self.documents
+            if d.meta.get("page") in wanted and (chat_id is None or d.meta.get("chat_id") == chat_id)
+        ]
+        return self._dedupe_by_text(sorted(matched, key=self._sort_key))
+
+    def get_neighbors(self, doc: Document, window: int = 1) -> list[Document]:
+        """Parent chunks immediately before/after `doc`'s own parent chunk,
+        in this document's natural (page, chunk) reading order — same
+        source + chat_id only, and never a TOC-flagged page (expansion is
+        for structural content completeness, not for pulling in unrelated
+        structural noise; TOC pages are transparently skipped over, so a
+        TOC page sitting between two content sections doesn't break their
+        adjacency).
+
+        This is how a chunk that scores far too low to enter any reasonable
+        candidate pool on its own — confirmed live: a real "Guideline #3"
+        chunk ranked ~140th for its own query, entirely on its own wording —
+        still reaches the LLM when the chunk immediately before/after it
+        (same page, same section) DID score well. See
+        RagService.retrieve's neighbor-expansion step and
+        config.NEIGHBOR_EXPANSION_WINDOW.
+
+        Returns one representative Document per neighboring parent chunk
+        (its first child, whose meta["parent_text"] already carries the
+        full parent text — the same text generation resolves to anyway).
+        """
+        page, chunk = doc.meta.get("page"), doc.meta.get("chunk")
+        if page is None or chunk is None or window <= 0:
+            return []
+
+        chat_id = doc.meta.get("chat_id")
+        scoped = [
+            d for d in self.documents
+            if d.source == doc.source
+            and d.meta.get("chat_id") == chat_id
+            and not _is_toc(d.meta)
+        ]
+        if not scoped:
+            return []
+
+        order: list[tuple] = []
+        representative: dict[tuple, Document] = {}
+        for d in sorted(scoped, key=self._sort_key):
+            pid = (d.meta.get("page"), d.meta.get("chunk"))
+            if pid not in representative:
+                order.append(pid)
+                representative[pid] = d
+
+        this_id = (page, chunk)
+        if this_id not in representative:
+            return []
+        pos = order.index(this_id)
+        neighbor_ids = order[max(0, pos - window):pos] + order[pos + 1:pos + 1 + window]
+        return [representative[pid] for pid in neighbor_ids]
 
     # -- read-only views used by the UI -- #
     @property

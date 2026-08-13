@@ -20,16 +20,22 @@ identical to the UI.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
 import time
+import uuid
 
 import config
 import chat_store
-from rag import chunking, evaluation, generator, golden_set, ingestion, reranker
+import db
+from rag import chunking, evaluation, generator, golden_set, ingestion, langsmith_logging, reranker
 from rag.ingestion import Document
+from rag.query_intent import NORMAL_QUERY, PAGE_QUERY, TOC_QUERY, detect_intent
 from rag.vectorstore import VectorStore
+
+logger = logging.getLogger(__name__)
 
 # Question keywords that hint at a desired source *type*, used to bias retrieval
 # toward the right kind of chunk when a chat somehow holds more than one source.
@@ -102,6 +108,10 @@ class ChatNotFoundError(Exception):
 
 class NoDocumentError(Exception):
     """Raised when a chat is asked a question but has no indexed file."""
+
+
+class MessageNotFoundError(Exception):
+    """Raised when an operation targets a message id that does not exist in the chat."""
 
 
 class RagService:
@@ -197,17 +207,40 @@ class RagService:
 
         # Index write — serialize against other writers/searchers.
         with self._lock:
+            replaced = self._replace_existing_file(chat_id)
             self.store.add(chunks)
             self.store.save(config.INDEX_DIR)
             indexed = self.store.size_for_chat(chat_id)
+
+        message = f"Indexed {filename} — {indexed} chunk(s) for this chat."
+        if replaced:
+            message = f"Replaced {replaced!r} with {filename} — {indexed} chunk(s) indexed."
 
         return {
             "chat_id": chat_id,
             "file": filename,
             "chunks_indexed": len(chunks),
             "backend": self.store.backend,
-            "message": f"Indexed {filename} — {indexed} chunk(s) for this chat.",
+            "message": message,
         }
+
+    def _replace_existing_file(self, chat_id: str) -> str | None:
+        """A chat holds exactly one file at a time (see chat_file/_annotate) —
+        uploading a new one REPLACES whatever was there, instead of
+        accumulating alongside it. Without this, re-uploading the same file
+        (or a revised version of it) leaves the old chunks in the index
+        forever, so the same content ends up indexed multiple times and
+        duplicate chunks compete for retrieval's top_k slots.
+
+        Must be called under self._lock, after confirming the new upload
+        actually produced chunks (never delete the old file over a failed
+        upload) and before the new ones are added. Returns the removed
+        filename, or None if the chat had no file yet.
+        """
+        existing = self.store.sources_for_chat(chat_id)
+        for src in existing:
+            self.store.remove_source(src, chat_id=chat_id)
+        return existing[0] if existing else None
 
     def ingest_file_stream(self, chat_id: str, file_bytes: bytes, filename: str):
         """Generator yielding real-time indexing progress events (0-100%, stage, ETA)."""
@@ -303,6 +336,7 @@ class RagService:
             })
 
         with self._lock:
+            replaced = self._replace_existing_file(chat_id)
             self.store.add(chunks, progress_callback=on_embed_progress)
             self.store.save(config.INDEX_DIR)
             indexed = self.store.size_for_chat(chat_id)
@@ -313,6 +347,11 @@ class RagService:
 
         # Step 4: Completion (100%)
         total_elapsed = round(time.time() - start_time, 1)
+        completion_message = f"Indexed {filename} — {indexed} chunk(s) ready in {total_elapsed}s!"
+        if replaced:
+            completion_message = (
+                f"Replaced {replaced!r} with {filename} — {indexed} chunk(s) ready in {total_elapsed}s!"
+            )
         yield {
             "status": "completed",
             "stage": "indexing",
@@ -321,7 +360,7 @@ class RagService:
             "percent": 100,
             "eta_seconds": 0,
             "chunks_indexed": len(chunks),
-            "message": f"Indexed {filename} — {indexed} chunk(s) ready in {total_elapsed}s!"
+            "message": completion_message,
         }
 
     def remove_file(self, chat_id: str, filename: str | None = None) -> str:
@@ -339,45 +378,187 @@ class RagService:
     # Retrieval — ported from app.py's `if question:` block
     # --------------------------------------------------------------------- #
     def retrieve(self, chat_id: str, question: str, history: list[dict]) -> dict:
-        """Rewrite the query, hybrid-search within the chat, filter, and format.
+        """Route by query intent, then rewrite/search/rerank (NORMAL_QUERY) or
+        deterministically pull TOC/page chunks straight from metadata
+        (TOC_QUERY/PAGE_QUERY — see rag.query_intent), and format.
 
         Returns a dict with: search_query, hits (list[(Document, score)]),
-        sources (list[dict]), confidence_pct, rewrite_ms, search_ms.
+        raw_hits (the pre-rerank candidate pool, for LangSmith's before/after
+        view — see rag.langsmith_logging.log_retrieval), sources (list[dict]),
+        confidence_pct, rewrite_ms, search_ms, rerank_ms, query_type, and
+        direct_answer (str | None — set for TOC_QUERY/PAGE_QUERY when nothing
+        matched, so the caller can skip the LLM and answer with a clear
+        "not found" message instead of risking a hallucinated one).
         """
         if self.store.size_for_chat(chat_id) == 0:
             raise NoDocumentError(chat_id)
 
-        top_k = config.TOP_K
+        intent = detect_intent(question)
+
+        if intent.kind == TOC_QUERY:
+            return self._retrieve_toc(chat_id)
+        if intent.kind == PAGE_QUERY:
+            return self._retrieve_pages(chat_id, intent.pages)
+
+        logger.info("query_type=%s exclude_toc=%s", NORMAL_QUERY, config.EXCLUDE_INDEX_PAGES)
 
         # 1. Rewrite follow-ups into a standalone query.
         t0 = time.perf_counter()
         search_q = generator.rewrite_query(question, history)
         rewrite_ms = int((time.perf_counter() - t0) * 1000)
 
-        # 2. Hybrid retrieve, scoped to THIS chat. Scale k with #sources (~1).
+        # 2. Hybrid retrieve a WIDE candidate pool, scoped to THIS chat.
+        #    candidate_k (fed to the reranker) is deliberately kept distinct
+        #    from final_k (what actually reaches the LLM) — see
+        #    config.RETRIEVAL_CANDIDATE_K/FINAL_CONTEXT_K. TOC/index pages are
+        #    excluded here (config.EXCLUDE_INDEX_PAGES), inside
+        #    store.search() — untouched by the TOC/PAGE routing above.
         num_sources = len(self.store.sources_for_chat(chat_id)) or 1
-        effective_top_k = max(top_k, min(num_sources * 2, 30))
+        final_k = max(config.FINAL_CONTEXT_K, min(num_sources * 2, 30))
+        candidate_k = max(config.RETRIEVAL_CANDIDATE_K, final_k)
 
         t1 = time.perf_counter()
         with self._lock:  # search touches the shared matrix/BM25 index
-            hits = self.store.search(
-                search_q, top_k=effective_top_k * 3, chat_id=chat_id
+            explained = self.store.search(
+                search_q, top_k=candidate_k, chat_id=chat_id, explain=True
             )
+            raw_hits = [(r["doc"], r["score"]) for r in explained]
+
+            # 2b. Neighbor/parent expansion: a chunk can be essential
+            #     evidence yet score far outside ANY reasonable candidate
+            #     pool on its own wording (confirmed live: a real
+            #     "Guideline #3" chunk ranked ~140th for its own query,
+            #     entirely below candidate_k). For each of the top-scoring
+            #     candidates, also pull its immediately adjacent chunk(s)
+            #     from the same page/section — see vectorstore.get_neighbors.
+            expanded_keys: set[int] = set()
+            if config.NEIGHBOR_EXPANSION_WINDOW > 0 and raw_hits:
+                seen_texts = {d.text for d, _ in raw_hits}
+                added: list[tuple[Document, float]] = []
+                for d, _ in raw_hits[: config.NEIGHBOR_EXPANSION_MAX_ANCHORS]:
+                    if len(added) >= config.NEIGHBOR_EXPANSION_MAX_ADDED:
+                        break
+                    for nb in self.store.get_neighbors(
+                        d, window=config.NEIGHBOR_EXPANSION_WINDOW
+                    ):
+                        if nb.text in seen_texts:
+                            continue
+                        if len(added) >= config.NEIGHBOR_EXPANSION_MAX_ADDED:
+                            break
+                        seen_texts.add(nb.text)
+                        added.append((nb, 0.0))
+                        expanded_keys.add(id(nb))
+                raw_hits = raw_hits + added
         search_ms = int((time.perf_counter() - t1) * 1000)
 
-        # 3. Rerank the candidate pool with a cross-encoder (query+chunk scored
-        #    jointly), which ranks far better than hybrid search's fixed blend.
-        if config.RERANK_ENABLED:
-            hits = reranker.rerank(search_q, hits)
+        # 3. Rerank the (candidate + expanded) pool with a cross-encoder
+        #    (query+chunk scored jointly, far better than hybrid search's
+        #    fixed blend). Neighbor-expanded chunks are exempt from the
+        #    RERANK_MIN_SCORE floor — they were added for structural
+        #    completeness, not because they're expected to score well
+        #    standing alone. Then a diversity pass (MMR) so several
+        #    near-duplicate restatements don't crowd out genuinely different
+        #    evidence — same exemption, since an expanded chunk being
+        #    similar to its anchor is expected, not redundant. Then the
+        #    existing type/source-keyword bias. Timed together as one
+        #    "rerank_ms" stage since that's how LangSmith's
+        #    rerank_documents span presents them — the final reranked *and*
+        #    filtered set, not an intermediate step.
+        t2 = time.perf_counter()
+        hits = (
+            reranker.rerank(search_q, raw_hits, protect=expanded_keys)
+            if config.RERANK_ENABLED
+            else raw_hits
+        )
+        hits = reranker.diversity_select(hits, final_k, protect=expanded_keys)
+        hits = self._filter_hits(question, search_q, hits, chat_id, final_k)
+        rerank_ms = int((time.perf_counter() - t2) * 1000)
 
-        # 4. Bias by source type or filename keywords (same heuristics as the UI).
-        hits = self._filter_hits(question, search_q, hits, chat_id, effective_top_k)
+        diagnostics = self._build_retrieval_diagnostics(explained, expanded_keys, hits)
+        self._log_retrieval_diagnostics(search_q, diagnostics)
 
         # 5. Confidence = top score (0..1) -> percentage.
         top_score = hits[0][1] if hits else 0.0
         confidence_pct = int(round(min(top_score, 1.0) * 100))
 
-        sources = [
+        return {
+            "search_query": search_q,
+            "hits": hits,
+            "raw_hits": raw_hits,
+            "sources": self._build_sources(hits),
+            "confidence_pct": confidence_pct,
+            "rewrite_ms": rewrite_ms,
+            "search_ms": search_ms,
+            "rerank_ms": rerank_ms,
+            "query_type": NORMAL_QUERY,
+            "direct_answer": None,
+            "retrieval_diagnostics": diagnostics,
+        }
+
+    def _build_retrieval_diagnostics(
+        self,
+        explained: list[dict],
+        expanded_keys: set[int],
+        final_hits: list[tuple[Document, float]],
+    ) -> list[dict]:
+        """One row per FINAL chunk — rank/chunk_id/page/section/chunk_type/
+        dense/bm25/hybrid/rerank score/whether it was neighbor-expanded — so
+        "did the required evidence enter the candidate pool, and if so did
+        reranking/filtering drop it" is answerable by reading one table
+        instead of guessing. Cheap (dict lookups + float rounding, no extra
+        model calls), so always built — this is what gets attached to the
+        rerank_documents span in LangSmith (see
+        rag.langsmith_logging.log_retrieval) as well as the DEBUG console log
+        below. Only a short text preview is kept, never the full chunk text.
+        """
+        components = {id(r["doc"]): (r["dense"], r["bm25"], r["score"]) for r in explained}
+        rows = []
+        for rank, (d, score) in enumerate(final_hits, 1):
+            dense, bm25, hybrid = components.get(id(d), (None, None, None))
+            rows.append({
+                "rank": rank,
+                "chunk_id": f"{d.meta.get('page')}:{d.meta.get('chunk')}:{d.meta.get('child')}",
+                "page": d.meta.get("page"),
+                "section": d.meta.get("section") or "",
+                "chunk_type": d.meta.get("chunk_type", "?"),
+                "dense_score": round(dense, 4) if dense is not None else None,
+                "bm25_score": round(bm25, 4) if bm25 is not None else None,
+                "hybrid_score": round(hybrid, 4) if hybrid is not None else None,
+                "reranker_score": round(score, 4),
+                "neighbor_expanded": id(d) in expanded_keys,
+                "text_preview": d.text[:120].replace("\n", " "),
+            })
+        return rows
+
+    def _log_retrieval_diagnostics(self, query: str, rows: list[dict]) -> None:
+        """Debug-only console rendering of `rows` as a fixed-width table.
+        No-op unless DEBUG logging is enabled — never adds noise to
+        production logs by default. The LangSmith copy of the same rows
+        (see `retrieval_diagnostics` in retrieve()'s return dict) is sent
+        regardless of log level, since that's a UI the user opts into per
+        question rather than a firehose console stream.
+        """
+        if not logger.isEnabledFor(logging.DEBUG) or not rows:
+            return
+        lines = [f"retrieval diagnostics query={query!r}"]
+        lines.append(
+            f"{'rank':<5}{'chunk_id':<14}{'page':<6}{'type':<8}"
+            f"{'dense':<8}{'bm25':<8}{'hybrid':<8}{'rerank':<8}{'expanded':<9}section / text"
+        )
+        for r in rows:
+            dense_s = "-" if r["dense_score"] is None else f"{r['dense_score']:.3f}"
+            bm25_s = "-" if r["bm25_score"] is None else f"{r['bm25_score']:.3f}"
+            hybrid_s = "-" if r["hybrid_score"] is None else f"{r['hybrid_score']:.3f}"
+            lines.append(
+                f"{r['rank']:<5}{r['chunk_id']:<14}{str(r['page']):<6}"
+                f"{r['chunk_type']:<8}{dense_s:<8}{bm25_s:<8}{hybrid_s:<8}"
+                f"{r['reranker_score']:<8.3f}{str(r['neighbor_expanded']):<9}"
+                f"{r['section']} | {r['text_preview'][:50]}"
+            )
+        logger.debug("\n".join(lines))
+
+    def _build_sources(self, hits: list[tuple[Document, float]]) -> list[dict]:
+        return [
             {
                 "index": i,
                 "source": d.source,
@@ -389,16 +570,76 @@ class RagService:
             for i, (d, s) in enumerate(hits, 1)
         ]
 
+    def _retrieve_toc(self, chat_id: str) -> dict:
+        """Deterministic TOC retrieval (TOC_QUERY): pull every chunk from
+        pages flagged TOC/index for this chat, in page order, bypassing the
+        exclusion mask entirely — "give me the TOC" is a structural request,
+        not a semantic-similarity one, so it shouldn't depend on whether
+        embedding/BM25 search happens to rank the TOC page highly.
+        """
+        t0 = time.perf_counter()
+        with self._lock:
+            toc_docs = self.store.get_toc_chunks(chat_id=chat_id)
+        search_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info("query_type=%s toc_pages=%s", TOC_QUERY,
+                    sorted({d.meta.get("page") for d in toc_docs if d.meta.get("page") is not None}))
+
+        hits = [(d, 1.0) for d in toc_docs]
+        direct_answer = None
+        if not hits:
+            direct_answer = (
+                "I couldn't find a table of contents in this document. "
+                "It may not have one, or it wasn't detected during ingestion "
+                "(older documents may need re-ingestion for TOC detection)."
+            )
+
         return {
-            "search_query": search_q,
+            "search_query": "table of contents",
             "hits": hits,
-            "sources": sources,
-            "confidence_pct": confidence_pct,
-            "rewrite_ms": rewrite_ms,
+            "raw_hits": hits,
+            "sources": self._build_sources(hits),
+            "confidence_pct": 100 if hits else 0,
+            "rewrite_ms": 0,
             "search_ms": search_ms,
+            "rerank_ms": 0,
+            "query_type": TOC_QUERY,
+            "direct_answer": direct_answer,
         }
 
-    def _filter_hits(self, question, search_q, hits, chat_id, effective_top_k):
+    def _retrieve_pages(self, chat_id: str, pages: list[int]) -> dict:
+        """Deterministic page retrieval (PAGE_QUERY): pull exactly the
+        requested page(s) for this chat, regardless of is_index — an
+        explicit page request always wins over the generic TOC-exclusion
+        rule for NORMAL_QUERY.
+        """
+        t0 = time.perf_counter()
+        with self._lock:
+            page_docs = self.store.get_by_pages(pages, chat_id=chat_id)
+        search_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info("query_type=%s requested_pages=%s found_chunks=%d",
+                    PAGE_QUERY, pages, len(page_docs))
+
+        hits = [(d, 1.0) for d in page_docs]
+        direct_answer = None
+        if not hits:
+            label = "Page" if len(pages) == 1 else "Pages"
+            pages_str = ", ".join(str(p) for p in pages)
+            direct_answer = f"{label} {pages_str} could not be found in this document."
+
+        return {
+            "search_query": f"page {', '.join(str(p) for p in pages)}",
+            "hits": hits,
+            "raw_hits": hits,
+            "sources": self._build_sources(hits),
+            "confidence_pct": 100 if hits else 0,
+            "rewrite_ms": 0,
+            "search_ms": search_ms,
+            "rerank_ms": 0,
+            "query_type": PAGE_QUERY,
+            "direct_answer": direct_answer,
+        }
+
+    def _filter_hits(self, question, search_q, hits, chat_id, final_k):
         """Type/source-aware narrowing of the retrieved pool (from app.py)."""
         q_lower = (question + " " + search_q).lower()
 
@@ -420,11 +661,11 @@ class RagService:
 
         if wanted_kind:
             filtered = [(d, s) for d, s in hits if d.kind == wanted_kind]
-            return filtered[:effective_top_k] if filtered else hits[:effective_top_k]
+            return filtered[:final_k] if filtered else hits[:final_k]
         if wanted_source:
             filtered = [(d, s) for d, s in hits if d.source == wanted_source]
-            return filtered[:effective_top_k] if filtered else hits[:effective_top_k]
-        return hits[:effective_top_k]
+            return filtered[:final_k] if filtered else hits[:final_k]
+        return hits[:final_k]
 
     # --------------------------------------------------------------------- #
     # Message persistence
@@ -435,58 +676,95 @@ class RagService:
         messages = chat.get("messages", [])
         if not messages:
             chat["title"] = question[:40] + "..." if len(question) > 40 else question
-        messages.append({"role": "user", "content": question})
+        messages.append({"id": str(uuid.uuid4()), "role": "user", "content": question})
         with self._lock:
             chat_store.update_chat_messages(self.chats, chat_id, messages)
         return messages
 
     def append_assistant_message(
-        self, chat_id: str, answer: str, sources: list[dict], metrics: dict | None
-    ) -> None:
+        self,
+        chat_id: str,
+        answer: str,
+        sources: list[dict],
+        metrics: dict | None,
+        question: str = "",
+        contexts: list[str] | None = None,
+        langsmith_run_id: str | None = None,
+    ) -> str:
+        """Append the assistant's answer. Returns the new message's id.
+
+        `question`/`contexts`/`langsmith_run_id` are persisted (not shown in
+        the UI) purely so evaluate_message() can score this exact turn later,
+        on demand — DeepEval no longer runs automatically at answer time, and
+        the original in-memory hits/RunTree are long gone by the time a user
+        clicks "Calculate Metrics" in a later, separate request.
+        """
         chat = self.get_chat(chat_id)
         messages = chat.get("messages", [])
         # "I don't know" answers are stored without sources, matching the UI.
         is_dont_know = "don't know" in answer.lower()
+        message_id = str(uuid.uuid4())
         messages.append({
+            "id": message_id,
             "role": "assistant",
             "content": answer,
             "sources": [] if is_dont_know else sources,
             "metrics": metrics,
+            "question": question,
+            "contexts": [] if is_dont_know else (contexts or []),
+            "langsmith_run_id": langsmith_run_id,
         })
         with self._lock:
             chat_store.update_chat_messages(self.chats, chat_id, messages)
+        return message_id
 
     # --------------------------------------------------------------------- #
     # Generation
     # --------------------------------------------------------------------- #
-    def answer_stream(self, search_query: str, hits, original_question: str | None = None):
-        """Yield answer text deltas from Groq (grounded in `hits`)."""
+    def answer_stream(
+        self,
+        search_query: str,
+        hits,
+        original_question: str | None = None,
+        verified_context: bool = False,
+    ):
+        """Yield answer text deltas from Groq (grounded in `hits`).
+
+        `verified_context` — pass True for PAGE_QUERY/TOC_QUERY results (see
+        rag.query_intent), whose hits were pulled deterministically by page
+        metadata rather than semantic search, so the model should describe
+        them directly instead of treating them as a search result to verify.
+        """
         return generator.answer(
             search_query,
             hits,
             model=config.DEFAULT_MODEL,
             temperature=config.DEFAULT_TEMPERATURE,
             original_question=original_question,
+            verified_context=verified_context,
         )
 
     # --------------------------------------------------------------------- #
-    # Evaluation (DeepEval metrics, computed after the answer)
+    # Evaluation (DeepEval metrics) — computed ONLY on demand, when the user
+    # clicks "Calculate Metrics" in the UI, via evaluate_message() below. Not
+    # run automatically at answer time (human-in-the-loop, since a DeepEval
+    # pass costs one judge call per metric and can take 10s of seconds).
     # --------------------------------------------------------------------- #
-    def evaluate_answer(self, question: str, answer: str, hits) -> dict | None:
+    def evaluate_answer(self, question: str, answer: str, contexts: list[str]) -> dict | None:
         """Score a produced answer on the three reference-free DeepEval metrics,
         plus context_precision/context_recall/answer_correctness when `question`
         closely matches one of the curated golden_set questions (see rag.golden_set).
 
-        Uses the FULL text of the retrieved chunks (not the truncated snippets in
-        `sources`). Returns None when evaluation is disabled, there is nothing to
-        score, or the answer was a refusal — never raises.
+        `contexts` should be the same parent-chunk text the answer was actually
+        generated from (see generator.context_texts) — persisted on the message
+        at generation time so it's still available here, computed on demand,
+        long after the original retrieval hits are gone. Returns None when
+        evaluation is disabled, there is nothing to score, or the answer was a
+        refusal — never raises.
         """
-        if not config.DEEPEVAL_ENABLED or not hits or not answer:
+        if not config.DEEPEVAL_ENABLED or not contexts or not answer:
             return None
         if "don't know" in answer.lower():
-            return None
-        contexts = [doc.text for doc, _ in hits if doc.text]
-        if not contexts:
             return None
         try:
             ground_truth = golden_set.lookup(question)
@@ -495,6 +773,36 @@ class RagService:
             return evaluation.evaluate(question, answer, contexts)
         except Exception:
             return None
+
+    def evaluate_message(self, chat_id: str, message_id: str) -> dict | None:
+        """Compute DeepEval metrics for one already-answered message, on demand.
+
+        Looks up the persisted question/answer/contexts from chat_store (saved
+        by append_assistant_message at generation time), scores them, merges
+        the result into that message's existing (timing-only) metrics dict,
+        and propagates it to Postgres + LangSmith feedback — same destinations
+        the old automatic scoring used to reach, just deferred until now.
+        """
+        chat = self.get_chat(chat_id)
+        messages = chat.get("messages", [])
+        message = next((m for m in messages if m.get("id") == message_id), None)
+        if message is None or message.get("role") != "assistant":
+            raise MessageNotFoundError(message_id)
+
+        ragas = self.evaluate_answer(
+            message.get("question", ""), message.get("content", ""), message.get("contexts") or []
+        )
+
+        metrics = dict(message.get("metrics") or {})
+        if ragas:
+            metrics.update(ragas)
+        message["metrics"] = metrics
+        with self._lock:
+            chat_store.update_chat_messages(self.chats, chat_id, messages)
+
+        db.update_qa_metrics(message_id, metrics)
+        langsmith_logging.attach_feedback(message.get("langsmith_run_id"), metrics)
+        return metrics
 
     # --------------------------------------------------------------------- #
     # Admin
