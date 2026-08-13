@@ -143,11 +143,11 @@ groq_client = groq_pool.current_client()[0] if groq_pool else None
 DB_FILE = "qa_sessions.db"
 
 # Model Configuration
-GENERATION_MODEL = os.getenv("GENERATION_MODEL", "llama-3.3-70b-versatile")
+GENERATION_MODEL = os.getenv("GENERATION_MODEL", "qwen/qwen3-32b")
 VISION_MODEL = os.getenv("VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")  # Groq multimodal model
-GEVAL_JUDGE_MODEL = os.getenv("GEVAL_JUDGE_MODEL", "llama-3.3-70b-versatile")
-RAG_JUDGE_MODEL = os.getenv("RAG_JUDGE_MODEL", "llama-3.3-70b-versatile")
-SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL", "llama-3.3-70b-versatile")
+GEVAL_JUDGE_MODEL = os.getenv("GEVAL_JUDGE_MODEL", "openai/gpt-oss-120b")
+RAG_JUDGE_MODEL = os.getenv("RAG_JUDGE_MODEL", "openai/gpt-oss-120b")
+SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL", "qwen/qwen3-32b")
 
 EVAL_CONCURRENCY_LIMIT = int(os.getenv("EVAL_CONCURRENCY", "3"))
 _eval_semaphore = asyncio.Semaphore(EVAL_CONCURRENCY_LIMIT)

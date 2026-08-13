@@ -1,114 +1,66 @@
 # QA Automation & DeepEval Studio
 
-## Project Overview
-
-This project is a **FastAPI-based QA Test Case Generator** with AI-powered evaluation capabilities. It automates the creation and validation of QA test cases from uploaded documents, featuring:
-
-- **Document Ingestion**: Support for PDF, TXT, and Markdown files
-- **Vision Analysis**: Optional vision-based document analysis for PDF pages
-- **LLM Generation**: Groq-powered LLM for intelligent QA dataset generation
-- **Quality Evaluation**: DeepEval-based metrics (Faithfulness, Relevancy, Precision, Recall)
-- **RAG Pipeline**: Retrieval-Augmented Generation for context-aware Q&A
-- **Chat Interface**: Interactive chat with generated Q&A datasets
-- **Web UI**: Simple, responsive web interface
-- **Persistent Storage**: SQLite database for session management
-
-Generated sessions and QA test cases are stored locally in `qa_sessions.db`.
+FastAPI-based QA Test Case Generator with AI-powered evaluation. Automates creation and validation of QA test cases from uploaded documents (PDF, TXT, Markdown) using Groq LLM, DeepEval metrics, and RAG pipeline.
 
 ---
 
 ## Setup Instructions
 
-### 1. Prerequisites
+### Prerequisites
+- Python 3.10+
+- pip
+- Valid Groq API key (https://console.groq.com/)
 
-- **Python 3.10+** (3.11+ recommended)
-- **pip** package manager
-- Valid **Groq API key** (free tier available at https://console.groq.com/)
-- Git (optional, for version control)
+### Virtual Environment Setup
 
-### 2. Clone or Extract the Repository
-
-```powershell
-cd d:\New folder\qa
-```
-
-### 3. Create and Activate a Virtual Environment
-
-**On Windows PowerShell:**
+**Windows PowerShell:**
 ```powershell
 python -m venv env
 .\env\Scripts\Activate.ps1
 ```
 
-**On Windows CMD:**
+**Windows CMD:**
 ```cmd
 python -m venv env
 env\Scripts\activate.bat
 ```
 
-**On macOS/Linux:**
+**macOS/Linux:**
 ```bash
 python3 -m venv env
 source env/bin/activate
 ```
 
-### 4. Install Dependencies
-
+### Install Dependencies
 ```powershell
 pip install -r requirements.txt
 ```
 
-### 5. Create Environment Configuration File
+### Environment Configuration
+Create a `.env` file in the project root:
 
-Create a `.env` file in the project root directory with the required variables (see **Environment Variables** section below):
-
-```powershell
-# Windows PowerShell
-@"
-GROQ_API_KEY=your_groq_api_key_here
-"@ | Out-File -Encoding UTF8 .env
-```
-
----
-
-## Required Environment Variables
-
-### Essential Variables
 
 ```env
-# Groq API Key (REQUIRED)
-# Get your free API key from https://console.groq.com/
+# Required
 GROQ_API_KEY=your_groq_api_key_here
 
-# For multiple accounts (comma-separated, recommended for free tier)
-GROQ_API_KEYS=key1,key2,key3,key4,key5
+# Multiple API keys
+GROQ_API_KEYS=key1,key2,key3
 
-# Or use individual keys
-GROQ_API_KEY_1=key1
-GROQ_API_KEY_2=key2
-```
-
-### Optional Model Configuration
-
-```env
-# LLM Models (defaults provided)
-GENERATION_MODEL=llama-3.3-70b-versatile
+# Model Configuration
+GENERATION_MODEL=qwen/qwen3-32b
 VISION_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
-GEVAL_JUDGE_MODEL=llama-3.3-70b-versatile
-RAG_JUDGE_MODEL=llama-3.3-70b-versatile
-SYNTHESIZER_MODEL=llama-3.3-70b-versatile
-
-# Embedding Model
+GEVAL_JUDGE_MODEL=openai/gpt-oss-120b
+RAG_JUDGE_MODEL=openai/gpt-oss-120b
+SYNTHESIZER_MODEL=qwen/qwen3-32b
 DEFAULT_EMBEDDING_MODEL=all-MiniLM-L6-v2
 
-# Performance & Rate Limiting
-DEFAULT_TPM=200000                      # Tokens per minute limit
-EVAL_CONCURRENCY=3                      # Max concurrent evaluations
-RAG_PIPELINE_CONCURRENCY=3              # Max concurrent RAG requests
-CHROMA_EMBED_BATCH_SIZE=64              # Batch size for embedding
-
-# ChromaDB Configuration
-CHROMA_DB_DIR=./chroma_db              # Vector store location
+# Performance Settings
+DEFAULT_TPM=200000
+EVAL_CONCURRENCY=3
+RAG_PIPELINE_CONCURRENCY=3
+CHROMA_EMBED_BATCH_SIZE=64
+CHROMA_DB_DIR=./chroma_db
 
 # LangSmith Tracing (Optional)
 LANGSMITH_TRACING=false
@@ -118,32 +70,18 @@ LANGSMITH_PROJECT=DocQnA-Chat
 
 ---
 
-## Running the Project Locally
+## Running the Project
 
-### Start the Development Server
+Start the development server:
 
-**Using Uvicorn (with auto-reload):**
 ```powershell
-uvicorn main:app --reload --host 127.0.0.1 --port 8010
+uvicorn main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-**Parameters:**
-- `--reload`: Auto-restart on code changes (development only)
-- `--host 127.0.0.1`: Listen only on localhost
-- `--port 8010`: Server port (change if needed)
-
-### Access the Application
-
-Once the server is running:
+Access:
 - **Web UI**: http://localhost:8001
-
-### Expected Console Output
-
-```
-INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
-INFO:     Started server process [1234]
-INFO:     Application startup complete
-```
+- **API Docs**: http://localhost:8010/docs
+- **Alternative Docs**: http://localhost:8010/redoc
 
 ---
 
