@@ -7,13 +7,19 @@ which is what keeps answers grounded and citable.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 
+import numpy as np
 from groq import Groq
 
 import config
+from rag.embeddings import embed
 from rag.ingestion import Document
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are a helpful assistant for question-answering over the user's own "
@@ -69,18 +75,38 @@ def list_models() -> list[str]:
         return config.FALLBACK_GROQ_MODELS
 
 
-def rewrite_query(question: str, history: list[dict]) -> str:
-    """Rewrite a follow-up question into a standalone search query.
+_VALID_MODES = ("standalone", "contextual", "clarify")
 
-    "and when is it due?" is unsearchable on its own — the embedding and BM25
-    stages need the missing subject ("the electricity bill") resolved from the
-    chat history. First questions and failures fall back to the original text.
+
+def _query_understanding(question: str, history: list[dict]) -> dict:
+    """One LLM call that reads the latest question against chat history and
+    decides which of three modes it's in — a single structured-JSON call
+    instead of separate classify/rewrite calls, since the model already has
+    to read the history to answer either question:
+
+      standalone  — fully understandable on its own, no reference to earlier
+                     conversation. A NEW document search, using the question
+                     as-is.
+      contextual  — relies on chat history to resolve a reference (pronoun,
+                     "earlier", "the same") before it's searchable. Still a
+                     NEW document search, once resolved.
+      clarify     — not a new question about the document at all: the user
+                     is asking to rephrase/simplify/expand/elaborate on the
+                     answer just given ("more clearly", "simplify that",
+                     "can you elaborate", "explain like I'm five", "give an
+                     example"). No new search — see
+                     RagService._retrieve_clarification, which reuses the
+                     previous turn's own retrieved context instead. Confirmed
+                     live: routing "more clearly" through a fresh document
+                     search retrieved unrelated text that merely happened to
+                     also discuss "clarity", producing a wrong answer.
+
+    Returns {"mode": ..., "query": ...}. Raises on any call/parse failure so
+    the caller can fall back to standalone.
     """
     turns = [m for m in history if m.get("role") in ("user", "assistant") and m.get("content")]
-    if not turns:
-        return question
 
-    # Include full list of user questions so the rewriter can resolve references to earlier topics
+    # Include full list of user questions so the model can resolve references to earlier topics
     user_questions = [f"- Turn {i+1}: {m['content'][:150]}" for i, m in enumerate(turns) if m.get("role") == "user"]
     user_q_summary = "\n".join(user_questions[-10:])
 
@@ -96,37 +122,121 @@ def rewrite_query(question: str, history: list[dict]) -> str:
         f"Latest user question: {question}"
     )
 
+    resp = _client().chat.completions.create(
+        model=config.REWRITE_MODEL,
+        temperature=0.0,
+        max_tokens=200,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a query-understanding stage for a RAG document search engine.\n"
+                    "Classify the user's LATEST message into exactly one mode:\n\n"
+                    "STANDALONE — fully understandable on its own, no reference to anything "
+                    "said earlier in this chat.\n"
+                    "CONTEXTUAL — relies on chat history to make sense (a pronoun, 'earlier', "
+                    "'the same', an unresolved reference) and needs to be rewritten into a "
+                    "standalone search query before it can be searched.\n"
+                    "CLARIFY — the user is NOT asking a new question about the document. They "
+                    "are asking you to rephrase, simplify, expand, elaborate on, or otherwise "
+                    "redo the ANSWER YOU JUST GAVE in the previous turn (e.g. 'more clearly', "
+                    "'simplify that', 'can you elaborate', 'explain like I'm 5', 'give an "
+                    "example', 'too complicated', 'in more detail', 'shorter please'). This "
+                    "applies whenever the message reads as feedback/instruction about HOW the "
+                    "previous answer was delivered, not a new fact being asked about the "
+                    "document.\n\n"
+                    "CRITICAL RULES:\n"
+                    "1. NO TOPIC POISONING: Do NOT force a previous topic (like 'LEAP framework') into a question about a different topic (like '3 zones', 'smart zone', 'color zones'). If the latest question introduces its own clear subject, it is STANDALONE even if earlier turns discussed something else entirely.\n"
+                    "2. EARLIER REFERENCES: If the user refers to something discussed earlier (e.g. 'earlier there 3 zones right'), check the past user questions and recent conversation to identify what '3 zones' refers to, and produce a query specific to that (mode=CONTEXTUAL).\n"
+                    "3. RESOLVE PRONOUNS: Replace ambiguous pronouns (it, that, they, these) with the exact subject being discussed, only when the pronoun's subject genuinely isn't in the latest question itself.\n"
+                    "4. WHEN IN DOUBT BETWEEN STANDALONE AND CONTEXTUAL, PICK STANDALONE. When in doubt about CLARIFY, ask: does this message contain its own new subject/topic? If yes, it's STANDALONE or CONTEXTUAL, not CLARIFY.\n\n"
+                    "Respond with ONLY a JSON object: "
+                    '{"mode": "standalone"|"contextual"|"clarify", "query": "..."}. '
+                    "For standalone or clarify, \"query\" must be the latest question, verbatim, unchanged. "
+                    "For contextual, \"query\" is the resolved standalone search query — concise, no quotes/labels."
+                ),
+            },
+            {"role": "user", "content": prompt_content},
+        ],
+    )
+    content = (resp.choices[0].message.content or "").strip()
+    parsed = json.loads(content)
+    mode = str(parsed.get("mode") or "").strip().lower()
+    if mode not in _VALID_MODES:
+        mode = "standalone"
+    query = str(parsed.get("query") or "").strip().strip('"\'')
+    return {"mode": mode, "query": query or question}
+
+
+def _rewrite_is_valid(question: str, rewritten: str) -> bool:
+    """Independent, non-LLM safety net on a "contextual" rewrite — the
+    classifier can still be wrong (or a small model can ignore an
+    instruction), so its output isn't trusted blindly.
+
+    A genuine follow-up rewrite stays close in meaning to the original
+    question ("and when is it due?" -> "when is the electricity bill due" —
+    same subject, just resolved). A topic-poisoned rewrite (confirmed live:
+    a standalone question about "analytical vs critical thinking" rewritten
+    into an unrelated earlier topic, "Cool Red vs Warm Red mindsets") does
+    not. Cosine similarity between the two, via the same embedding model
+    already used for retrieval, catches that drift regardless of wording —
+    no need to enumerate every way a rewrite can go wrong.
+    """
+    if not rewritten or rewritten.strip() == question.strip():
+        return True
+    if len(rewritten) > max(200, 3 * len(question)):
+        return False
+    vecs = embed([question, rewritten])
+    similarity = float(np.dot(vecs[0], vecs[1]))
+    return similarity >= config.REWRITE_MIN_SIMILARITY
+
+
+def classify_followup(question: str, history: list[dict]) -> dict:
+    """Understand how `question` relates to the conversation so far.
+
+    Returns {"mode": "standalone"|"contextual"|"clarify", "query": str}.
+    `query` is the validated, resolved standalone search query for
+    "contextual" (falls back to "standalone" with the original question if
+    the rewrite looks topic-poisoned — see _rewrite_is_valid), and the
+    original question, unchanged, for "standalone"/"clarify" (for "clarify"
+    it's not used as a search query at all — see
+    RagService._retrieve_clarification).
+    """
+    turns = [m for m in history if m.get("role") in ("user", "assistant") and m.get("content")]
+    if not turns:
+        return {"mode": "standalone", "query": question}
+
     try:
-        resp = _client().chat.completions.create(
-            model=config.REWRITE_MODEL,
-            temperature=0.0,
-            max_tokens=120,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a search query optimizer for a RAG document search engine.\n"
-                        "Your task: rewrite the user's latest question into a standalone, concise search query.\n\n"
-                        "CRITICAL RULES:\n"
-                        "1. NO TOPIC POISONING: Do NOT force a previous topic (like 'LEAP framework') into a question about a different topic (like '3 zones', 'smart zone', 'color zones').\n"
-                        "2. EARLIER REFERENCES: If the user refers to something discussed earlier (e.g. 'earlier there 3 zones right'), check the past user questions and recent conversation to identify what '3 zones' refers to (e.g. Yellow zone, Green zone, Smart zones / Red zone), and rewrite the query specifically for those zones.\n"
-                        "3. RESOLVE PRONOUNS: Replace ambiguous pronouns (it, that, they, these) with the exact subject being discussed.\n"
-                        "4. ALREADY STANDALONE: If the latest question is already clean and specific (e.g. 'can u explain about smart zone'), keep it focused without appending unrelated frameworks.\n"
-                        "5. OUTPUT FORMAT: Return ONLY the rewritten search query. No quotes, explanations, or labels."
-                    ),
-                },
-                {"role": "user", "content": prompt_content},
-            ],
-        )
-        rewritten = (resp.choices[0].message.content or "").strip()
-        # Remove surrounding quotes if any
-        rewritten = rewritten.strip('"\'')
-        # Sanity guard: a rambling or empty rewrite is worse than the original.
-        if rewritten and len(rewritten) <= max(200, 3 * len(question)):
-            return rewritten
+        result = _query_understanding(question, history)
     except Exception:
-        pass
-    return question
+        logger.warning("Query-understanding call failed; treating as standalone", exc_info=True)
+        return {"mode": "standalone", "query": question}
+
+    if result["mode"] == "clarify":
+        return {"mode": "clarify", "query": question}
+
+    if result["mode"] != "contextual" or not result["query"]:
+        return {"mode": "standalone", "query": question}
+
+    if not _rewrite_is_valid(question, result["query"]):
+        logger.info(
+            "Rewrite failed validation (likely topic drift); falling back to the original question. "
+            "original=%r rewritten=%r",
+            question, result["query"],
+        )
+        return {"mode": "standalone", "query": question}
+
+    return {"mode": "contextual", "query": result["query"]}
+
+
+def rewrite_query(question: str, history: list[dict]) -> str:
+    """Backward-compatible convenience wrapper around classify_followup() for
+    callers that only want the resolved search string, not the mode
+    (RagService.retrieve() calls classify_followup() directly so it can also
+    branch on "clarify")."""
+    result = classify_followup(question, history)
+    return question if result["mode"] == "clarify" else result["query"]
 
 
 _HEADER_RE = re.compile(r"^\[(PDF|File|Image|DOCX|PPTX):[^\]]+\]\n?", re.MULTILINE)
@@ -172,6 +282,7 @@ def answer(
     temperature: float = config.DEFAULT_TEMPERATURE,
     original_question: str | None = None,
     verified_context: bool = False,
+    usage: dict | None = None,
 ):
     """Stream an answer from Groq, grounded in the retrieved context.
 
@@ -185,6 +296,12 @@ def answer(
     wasn't enough to stop this, since nothing next to the context itself
     asserted it. Asserting it directly above the context (not just in the
     system prompt) is what actually changes the model's behavior.
+
+    `usage` — an optional dict this function populates in place with
+    prompt_tokens/completion_tokens/total_tokens once the stream's final
+    chunk arrives, so a caller consuming this generator token-by-token
+    (for the live UI) can still recover real token counts afterward for
+    cost/latency tracking, without giving up streaming to get them.
 
     Yields text deltas so the UI can render the answer live.
     """
@@ -209,12 +326,27 @@ def answer(
         temperature=temperature,
         max_tokens=config.MAX_TOKENS,
         stream=True,
+        # Not a typed kwarg on this SDK version (groq==1.6.0) — confirmed
+        # live it TypeErrors as an unexpected keyword if passed directly,
+        # breaking every answer. The underlying Groq API does honor it
+        # (confirmed live too, real usage numbers came back), so it's
+        # forwarded via extra_body instead, same as any other
+        # OpenAI-wire-compatible param the SDK hasn't added a typed
+        # parameter for yet.
+        extra_body={"stream_options": {"include_usage": True}},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
     )
     for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+        if chunk.choices:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+        # The final chunk (stream_options.include_usage) has empty choices
+        # and carries token counts instead of a delta.
+        if usage is not None and getattr(chunk, "usage", None):
+            usage["prompt_tokens"] = chunk.usage.prompt_tokens
+            usage["completion_tokens"] = chunk.usage.completion_tokens
+            usage["total_tokens"] = chunk.usage.total_tokens

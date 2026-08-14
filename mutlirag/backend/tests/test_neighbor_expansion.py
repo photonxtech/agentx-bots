@@ -125,7 +125,10 @@ def _mocks(monkeypatch):
     monkeypatch.setattr("rag.vectorstore.embed", _fake_embed)
     monkeypatch.setattr(reranker_mod, "embed", _fake_embed)
     monkeypatch.setattr(reranker_mod, "get_model", lambda: _FakeCrossEncoder())
-    monkeypatch.setattr(generator, "rewrite_query", lambda question, history: question)
+    monkeypatch.setattr(
+        generator, "classify_followup",
+        lambda question, history: {"mode": "standalone", "query": question},
+    )
 
 
 def _doc(text, page, chunk, child=0, chat_id=CHAT_ID):

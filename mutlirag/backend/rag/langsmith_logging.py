@@ -101,6 +101,9 @@ def log_retrieval(
     final_contexts: list[str],
     rerank_ms: int | None,
     diagnostics: list[dict] | None = None,
+    neighbor_expansion_ms: int | None = None,
+    diversity_ms: int | None = None,
+    retrieval_meta: dict | None = None,
 ) -> None:
     """Log retrieval as a 'retrieve_documents' child run under run, with
     'vector_search' (pre-rerank candidate pool) and 'rerank_documents' (final
@@ -109,20 +112,35 @@ def log_retrieval(
 
     `diagnostics` (see api.service.RagService._build_retrieval_diagnostics) —
     one row per final chunk with rank/chunk_id/page/section/chunk_type/
-    dense/bm25/hybrid/reranker scores — is attached as structured output on
-    the rerank_documents span, so this per-question breakdown is visible in
-    the LangSmith UI (Outputs tab of that span) without needing DEBUG-level
-    server logs.
+    dense/bm25/hybrid/reranker scores plus parent/child chunk identity
+    (parent_id/child_index/parent_chars/child_chars/used_parent_context) — is
+    attached as structured output on the rerank_documents span, so this
+    per-question breakdown is visible in the LangSmith UI (Outputs tab of
+    that span) without needing DEBUG-level server logs.
+
+    `neighbor_expansion_ms`/`diversity_ms` — timed separately from
+    search_ms/rerank_ms (see RagService.retrieve) so a slow vector DB, a slow
+    neighbor-expansion pass, a slow cross-encoder, and a slow MMR/filter pass
+    are each independently identifiable instead of bundled together.
+
+    `retrieval_meta` — embedding_model/rerank_model/candidate_k/final_k/
+    expanded_count, attached to the parent span so the models and pool sizes
+    actually used for this turn are visible without cross-referencing config.
     """
     if run is None:
         return
     try:
-        search_start = datetime.now(timezone.utc) - timedelta(
-            milliseconds=(search_ms or 0) + (rerank_ms or 0)
+        total_ms = (
+            (search_ms or 0) + (neighbor_expansion_ms or 0)
+            + (rerank_ms or 0) + (diversity_ms or 0)
         )
-        rerank_start = search_start + timedelta(milliseconds=search_ms or 0)
-        rerank_end = rerank_start + timedelta(milliseconds=rerank_ms or 0)
+        search_start = datetime.now(timezone.utc) - timedelta(milliseconds=total_ms)
+        expand_start = search_start + timedelta(milliseconds=search_ms or 0)
+        rerank_start = expand_start + timedelta(milliseconds=neighbor_expansion_ms or 0)
+        diversity_start = rerank_start + timedelta(milliseconds=rerank_ms or 0)
+        rerank_end = diversity_start + timedelta(milliseconds=diversity_ms or 0)
 
+        meta = retrieval_meta or {}
         parent = run.create_child(
             name="retrieve_documents",
             run_type="retriever",
@@ -134,12 +152,19 @@ def log_retrieval(
             # chunk vector_search/rerank_documents below are scoring.
             extra={
                 "metadata": {
+                    "embedding_model": meta.get("embedding_model", config.EMBEDDING_MODEL),
+                    "rerank_model": meta.get("rerank_model", config.RERANK_MODEL),
+                    "candidate_k": meta.get("candidate_k"),
+                    "final_k": meta.get("final_k"),
+                    "expanded_count": meta.get("expanded_count"),
+                    "neighbor_expansion_ms": neighbor_expansion_ms,
+                    "diversity_ms": diversity_ms,
                     "chunking": {
                         "parent_chunk_size": config.PARENT_CHUNK_SIZE,
                         "parent_chunk_overlap": config.PARENT_CHUNK_OVERLAP,
                         "child_chunk_size": config.CHILD_CHUNK_SIZE,
                         "child_chunk_overlap": config.CHILD_CHUNK_OVERLAP,
-                    }
+                    },
                 }
             },
         )
@@ -151,7 +176,7 @@ def log_retrieval(
             start_time=search_start,
             extra={"metadata": {"model": config.EMBEDDING_MODEL}},
         )
-        vector_search.end(outputs={"documents": raw_contexts}, end_time=rerank_start)
+        vector_search.end(outputs={"documents": raw_contexts}, end_time=expand_start)
         vector_search.post()
 
         rerank_documents = parent.create_child(
@@ -180,6 +205,7 @@ def log_generation(
     answer: str,
     ttft_ms: int,
     generation_ms: int,
+    usage: dict | None = None,
 ) -> None:
     """Log the Groq call as an 'llm' child run under run.
 
@@ -188,23 +214,59 @@ def log_generation(
     TTFT has no dedicated field on a non-streamed 'llm' run, so it's attached
     as metadata; the run's own start/end still spans the full generation_ms
     so the span's displayed latency is the true end-to-end duration.
+
+    `usage` — prompt_tokens/completion_tokens/total_tokens (see
+    generator.answer's `usage` sink param), attached both as metadata here
+    and, via LangSmith's own token-usage fields, so cost/latency dashboards
+    that read `usage_metadata` pick it up natively instead of needing a
+    custom metric.
     """
     if run is None:
         return
     try:
         end = datetime.now(timezone.utc)
         start = end - timedelta(milliseconds=generation_ms or 0)
+        usage = usage or {}
         child = run.create_child(
             name="llm",
             run_type="llm",
             inputs={"question": question, "model": model},
             start_time=start,
-            extra={"metadata": {"ttft_ms": ttft_ms, "generation_ms": generation_ms}},
+            extra={
+                "metadata": {
+                    "ttft_ms": ttft_ms,
+                    "generation_ms": generation_ms,
+                    "usage_metadata": {
+                        "input_tokens": usage.get("prompt_tokens"),
+                        "output_tokens": usage.get("completion_tokens"),
+                        "total_tokens": usage.get("total_tokens"),
+                    },
+                }
+            },
         )
         child.end(outputs={"answer": answer}, end_time=end)
         child.post()
     except Exception:
         logger.warning("LangSmith generation logging failed", exc_info=True)
+
+
+def fail_chat_turn(run: RunTree | None, error: str) -> None:
+    """Close an in-progress 'chat_turn' run as FAILED instead of leaving it
+    orphaned (perpetually "running") in the LangSmith UI.
+
+    Confirmed live: retrieval raising NoDocumentError, or generation raising
+    mid-stream, both re-raised straight to FastAPI's error handling in
+    api.main without ever calling end_chat_turn() — the run started by
+    start_chat_turn() was simply never closed. Call this from those except
+    blocks, before re-raising/yielding the error to the client.
+    """
+    if run is None:
+        return
+    try:
+        run.end(error=error, end_time=datetime.now(timezone.utc))
+        run.patch()
+    except Exception:
+        logger.warning("LangSmith chat-turn failure logging failed", exc_info=True)
 
 
 def end_chat_turn(

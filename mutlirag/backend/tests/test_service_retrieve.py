@@ -81,10 +81,13 @@ def _doc(text, page, is_index=False, chat_id="chat1"):
 
 @pytest.fixture(autouse=True)
 def _stub_llm_dependent_stages(monkeypatch):
-    """NORMAL_QUERY calls generator.rewrite_query (a Groq call) and
+    """NORMAL_QUERY calls generator.classify_followup (a Groq call) and
     reranker.rerank (loads a cross-encoder model) — stub both to identity so
     the NORMAL_QUERY test never needs network/model access."""
-    monkeypatch.setattr(generator, "rewrite_query", lambda question, history: question)
+    monkeypatch.setattr(
+        generator, "classify_followup",
+        lambda question, history: {"mode": "standalone", "query": question},
+    )
     monkeypatch.setattr(reranker, "rerank", lambda query, hits, protect=None: hits)
     monkeypatch.setattr(reranker, "diversity_select", lambda hits, k, protect=None, lambda_mult=None: hits[:k])
 
@@ -158,3 +161,53 @@ def test_page_query_never_leaks_another_chats_document():
     r = svc.retrieve("chat1", "What does page 10 say?", [])
     assert len(r["hits"]) == 1
     assert r["hits"][0][0].meta["chat_id"] == "chat1"
+
+
+def test_clarify_followup_reuses_previous_answer_context_without_a_new_search(monkeypatch):
+    """Regression test for a real production bug: "more clearly" (a
+    clarification of the answer just given, not a new document question)
+    was searched fresh and retrieved unrelated content. When
+    classify_followup() says "clarify", retrieve() must reuse the previous
+    turn's own persisted context/sources and must NOT touch the store at all."""
+    svc = _service([_doc("some unrelated document content", page=1, is_index=False)])
+
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("clarify mode must not run a new search")
+
+    monkeypatch.setattr(svc.store, "search", _must_not_be_called)
+    monkeypatch.setattr(
+        generator, "classify_followup",
+        lambda question, history: {"mode": "clarify", "query": question},
+    )
+
+    history = [
+        {"role": "user", "content": "think as i am kid and explain what does red mean in this document"},
+        {
+            "role": "assistant",
+            "content": "Red means you like making decisions quickly.",
+            "contexts": ["Red is one of the four 4D-i colors, associated with fast decision-making."],
+            "sources": [{"source": "osw_data.pdf", "page": 12}],
+        },
+    ]
+    r = svc.retrieve("chat1", "more clearly", history)
+
+    assert r["query_type"] == "CLARIFY_QUERY"
+    assert r["direct_answer"] is None
+    assert len(r["hits"]) == 1
+    assert r["hits"][0][0].text == "Red is one of the four 4D-i colors, associated with fast decision-making."
+    assert r["sources"] == [{"source": "osw_data.pdf", "page": 12}]
+    assert "think as i am kid" in r["search_query"]
+
+
+def test_clarify_followup_with_no_previous_answer_falls_back_to_normal_search(monkeypatch):
+    """No prior assistant turn to clarify (e.g. classify_followup misfires on
+    the very first message) -> must fall through to an ordinary search
+    instead of returning nothing."""
+    svc = _service([_doc("RAG stands for retrieval augmented generation", page=2, is_index=False)])
+    monkeypatch.setattr(
+        generator, "classify_followup",
+        lambda question, history: {"mode": "clarify", "query": question},
+    )
+    r = svc.retrieve("chat1", "more clearly", [])
+    assert r["query_type"] == "NORMAL_QUERY"
+    assert len(r["hits"]) == 1

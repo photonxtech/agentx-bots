@@ -208,7 +208,7 @@ MMR_LAMBDA = 0.7
 # "weaviate" -> self-hosted Weaviate (see docker-compose.yml); "chroma" -> the
 # original embedded ChromaDB. If Weaviate is selected but unreachable at
 # startup, the app automatically falls back to Chroma so nothing breaks.
-VECTOR_BACKEND = "weaviate"
+VECTOR_BACKEND = "chroma"
 
 # --- Weaviate connection (only used when VECTOR_BACKEND == "weaviate") ---
 # Matches the ports published in docker-compose.yml. We supply our own vectors
@@ -234,6 +234,23 @@ CACHE_DIR = os.path.join(INDEX_DIR, "cache")
 # recent chat history, with a small fast model.
 REWRITE_MODEL = "llama-3.1-8b-instant"
 REWRITE_HISTORY_TURNS = 6   # how many recent messages to give the rewriter
+
+# --- Query understanding / rewrite validation ---
+# Confirmed live: a fully standalone question ("What is the difference between
+# analytical thinking and critical thinking?") got rewritten by the model into
+# an unrelated EARLIER topic from the chat history — a prompt instruction
+# ("NO TOPIC POISONING") alone wasn't enough to prevent it. Instead of trying
+# to enumerate every way a question can be "already standalone" (a keyword/
+# regex list never fully covers real phrasing), the classification of
+# standalone vs. contextual is itself an LLM judgment (see
+# generator._query_understanding), and its output gets an independent,
+# non-LLM safety net before being trusted: embedding similarity between the
+# original question and the rewritten query. A genuine follow-up rewrite
+# stays close in meaning to the original ("and when is it due?" ~ "when is
+# the electricity bill due" — shared subject); a topic-poisoned one doesn't.
+# Below this cosine similarity, the rewrite is treated as suspicious and
+# discarded in favor of the original question.
+REWRITE_MIN_SIMILARITY = 0.30
 
 # --- Groq generation defaults ---
 # Curated fallback list, used only if the live /models call fails.

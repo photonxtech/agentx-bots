@@ -32,7 +32,7 @@ import chat_store
 import db
 from rag import chunking, evaluation, generator, golden_set, ingestion, langsmith_logging, reranker
 from rag.ingestion import Document
-from rag.query_intent import NORMAL_QUERY, PAGE_QUERY, TOC_QUERY, detect_intent
+from rag.query_intent import CLARIFY_QUERY, NORMAL_QUERY, PAGE_QUERY, TOC_QUERY, detect_intent
 from rag.vectorstore import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -402,10 +402,22 @@ class RagService:
 
         logger.info("query_type=%s exclude_toc=%s", NORMAL_QUERY, config.EXCLUDE_INDEX_PAGES)
 
-        # 1. Rewrite follow-ups into a standalone query.
+        # 1. Understand the follow-up: standalone / contextual (both need a
+        #    new search) / clarify (asking to rephrase/simplify/elaborate on
+        #    the PREVIOUS answer — no new search at all, see
+        #    _retrieve_clarification).
         t0 = time.perf_counter()
-        search_q = generator.rewrite_query(question, history)
+        understanding = generator.classify_followup(question, history)
         rewrite_ms = int((time.perf_counter() - t0) * 1000)
+
+        if understanding["mode"] == "clarify":
+            clarification = self._retrieve_clarification(history, question, rewrite_ms)
+            if clarification is not None:
+                return clarification
+            # No usable previous answer to clarify (e.g. this is actually the
+            # first turn) -> fall through and treat it as a normal question.
+
+        search_q = understanding["query"]
 
         # 2. Hybrid retrieve a WIDE candidate pool, scoped to THIS chat.
         #    candidate_k (fed to the reranker) is deliberately kept distinct
@@ -423,6 +435,7 @@ class RagService:
                 search_q, top_k=candidate_k, chat_id=chat_id, explain=True
             )
             raw_hits = [(r["doc"], r["score"]) for r in explained]
+            search_ms = int((time.perf_counter() - t1) * 1000)
 
             # 2b. Neighbor/parent expansion: a chunk can be essential
             #     evidence yet score far outside ANY reasonable candidate
@@ -431,6 +444,9 @@ class RagService:
             #     entirely below candidate_k). For each of the top-scoring
             #     candidates, also pull its immediately adjacent chunk(s)
             #     from the same page/section — see vectorstore.get_neighbors.
+            #     Timed separately from the hybrid search above so a slow
+            #     expansion pass is distinguishable from a slow vector DB.
+            t_expand = time.perf_counter()
             expanded_keys: set[int] = set()
             if config.NEIGHBOR_EXPANSION_WINDOW > 0 and raw_hits:
                 seen_texts = {d.text for d, _ in raw_hits}
@@ -449,30 +465,32 @@ class RagService:
                         added.append((nb, 0.0))
                         expanded_keys.add(id(nb))
                 raw_hits = raw_hits + added
-        search_ms = int((time.perf_counter() - t1) * 1000)
+        neighbor_expansion_ms = int((time.perf_counter() - t_expand) * 1000)
 
         # 3. Rerank the (candidate + expanded) pool with a cross-encoder
         #    (query+chunk scored jointly, far better than hybrid search's
         #    fixed blend). Neighbor-expanded chunks are exempt from the
         #    RERANK_MIN_SCORE floor — they were added for structural
         #    completeness, not because they're expected to score well
-        #    standing alone. Then a diversity pass (MMR) so several
-        #    near-duplicate restatements don't crowd out genuinely different
-        #    evidence — same exemption, since an expanded chunk being
-        #    similar to its anchor is expected, not redundant. Then the
-        #    existing type/source-keyword bias. Timed together as one
-        #    "rerank_ms" stage since that's how LangSmith's
-        #    rerank_documents span presents them — the final reranked *and*
-        #    filtered set, not an intermediate step.
+        #    standing alone.
         t2 = time.perf_counter()
         hits = (
             reranker.rerank(search_q, raw_hits, protect=expanded_keys)
             if config.RERANK_ENABLED
             else raw_hits
         )
+        rerank_ms = int((time.perf_counter() - t2) * 1000)
+
+        # 4. Diversity pass (MMR) so several near-duplicate restatements
+        #    don't crowd out genuinely different evidence — same protect
+        #    exemption as above — then the existing type/source-keyword
+        #    bias. Timed separately from the cross-encoder scoring above so
+        #    a slow reranker model is distinguishable from a slow selection
+        #    pass.
+        t3 = time.perf_counter()
         hits = reranker.diversity_select(hits, final_k, protect=expanded_keys)
         hits = self._filter_hits(question, search_q, hits, chat_id, final_k)
-        rerank_ms = int((time.perf_counter() - t2) * 1000)
+        diversity_ms = int((time.perf_counter() - t3) * 1000)
 
         diagnostics = self._build_retrieval_diagnostics(explained, expanded_keys, hits)
         self._log_retrieval_diagnostics(search_q, diagnostics)
@@ -489,10 +507,73 @@ class RagService:
             "confidence_pct": confidence_pct,
             "rewrite_ms": rewrite_ms,
             "search_ms": search_ms,
+            "neighbor_expansion_ms": neighbor_expansion_ms,
             "rerank_ms": rerank_ms,
+            "diversity_ms": diversity_ms,
             "query_type": NORMAL_QUERY,
             "direct_answer": None,
             "retrieval_diagnostics": diagnostics,
+            "retrieval_meta": {
+                "embedding_model": config.EMBEDDING_MODEL,
+                "rerank_model": config.RERANK_MODEL,
+                "candidate_k": candidate_k,
+                "final_k": final_k,
+                "expanded_count": len(expanded_keys),
+            },
+        }
+
+    def _retrieve_clarification(
+        self, history: list[dict], question: str, rewrite_ms: int
+    ) -> dict | None:
+        """Answer a "make it simpler / explain more / give an example"
+        follow-up by reusing the immediately preceding answer's OWN retrieved
+        context, instead of running a new search.
+
+        Confirmed live: a follow-up like "more clearly" has no topical
+        content of its own, so a fresh hybrid search on it retrieves
+        whatever text in the document happens to also literally discuss
+        clarity/writing — nothing to do with what was actually being
+        discussed — and produces a wrong, unrelated answer. The previous
+        turn's context was already the right grounding; reusing it verbatim
+        can't drift onto a different topic the way a brand-new search can.
+
+        Returns None if there's no usable previous assistant answer to
+        clarify (e.g. this is actually the first turn), so the caller can
+        fall back to treating this as an ordinary new question.
+        """
+        prev_assistant = next(
+            (m for m in reversed(history) if m.get("role") == "assistant" and m.get("contexts")),
+            None,
+        )
+        if prev_assistant is None:
+            return None
+        prev_user = next((m for m in reversed(history) if m.get("role") == "user"), None)
+
+        hits = [
+            (Document(text=ctx, source="(previous answer)", kind="text", meta={}), 1.0)
+            for ctx in prev_assistant["contexts"]
+        ]
+        if not hits:
+            return None
+
+        search_query = (
+            f'{question} (follow-up asking to clarify/rephrase/expand your previous '
+            f'answer to: "{prev_user["content"]}")'
+            if prev_user else question
+        )
+
+        return {
+            "search_query": search_query,
+            "hits": hits,
+            "raw_hits": hits,
+            "sources": prev_assistant.get("sources") or [],
+            "confidence_pct": 100,
+            "rewrite_ms": rewrite_ms,
+            "search_ms": 0,
+            "rerank_ms": 0,
+            "query_type": CLARIFY_QUERY,
+            "direct_answer": None,
+            "retrieval_diagnostics": None,
         }
 
     def _build_retrieval_diagnostics(
@@ -515,6 +596,7 @@ class RagService:
         rows = []
         for rank, (d, score) in enumerate(final_hits, 1):
             dense, bm25, hybrid = components.get(id(d), (None, None, None))
+            parent_text = d.meta.get("parent_text") or d.text
             rows.append({
                 "rank": rank,
                 "chunk_id": f"{d.meta.get('page')}:{d.meta.get('chunk')}:{d.meta.get('child')}",
@@ -527,6 +609,18 @@ class RagService:
                 "reranker_score": round(score, 4),
                 "neighbor_expanded": id(d) in expanded_keys,
                 "text_preview": d.text[:120].replace("\n", " "),
+                # Parent/child visibility: `chunk_id`'s "page:chunk" prefix is
+                # the PARENT identity (one PARENT_CHUNK_SIZE-character section
+                # of the document); "child" is this hit's own small
+                # CHILD_CHUNK_SIZE-character match within it. `used_parent_context`
+                # confirms whether the LLM actually got the wider parent_text
+                # instead of just the narrow child match that scored well —
+                # false for chunks indexed before parent-child chunking existed.
+                "parent_id": f"{d.meta.get('page')}:{d.meta.get('chunk')}",
+                "child_index": d.meta.get("child"),
+                "child_chars": len(d.text),
+                "parent_chars": len(parent_text),
+                "used_parent_context": parent_text != d.text,
             })
         return rows
 
@@ -727,6 +821,7 @@ class RagService:
         hits,
         original_question: str | None = None,
         verified_context: bool = False,
+        usage: dict | None = None,
     ):
         """Yield answer text deltas from Groq (grounded in `hits`).
 
@@ -734,6 +829,9 @@ class RagService:
         rag.query_intent), whose hits were pulled deterministically by page
         metadata rather than semantic search, so the model should describe
         them directly instead of treating them as a search result to verify.
+
+        `usage` — an optional dict populated in place with token counts once
+        the stream finishes (see generator.answer), for cost/latency tracking.
         """
         return generator.answer(
             search_query,
@@ -742,6 +840,7 @@ class RagService:
             temperature=config.DEFAULT_TEMPERATURE,
             original_question=original_question,
             verified_context=verified_context,
+            usage=usage,
         )
 
     # --------------------------------------------------------------------- #

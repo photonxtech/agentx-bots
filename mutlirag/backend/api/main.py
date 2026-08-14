@@ -255,6 +255,7 @@ def ask(chat_id: str, body: schemas.AskRequest):
     try:
         r = s.retrieve(chat_id, body.question, history)
     except NoDocumentError:
+        langsmith_logging.fail_chat_turn(ls_run_id, "NoDocumentError: chat has no uploaded file")
         raise HTTPException(
             status_code=400,
             detail="Upload a file for this chat first — each chat answers only "
@@ -265,6 +266,9 @@ def ask(chat_id: str, body: schemas.AskRequest):
     langsmith_logging.log_retrieval(
         ls_run_id, r["search_query"], raw_contexts, r["search_ms"], contexts, r["rerank_ms"],
         diagnostics=r.get("retrieval_diagnostics"),
+        neighbor_expansion_ms=r.get("neighbor_expansion_ms", 0),
+        diversity_ms=r.get("diversity_ms", 0),
+        retrieval_meta=r.get("retrieval_meta"),
     )
 
     s.append_user_message(chat_id, body.question)
@@ -277,6 +281,8 @@ def ask(chat_id: str, body: schemas.AskRequest):
         metrics = {
             "rewrite_ms": r["rewrite_ms"],
             "search_ms": r["search_ms"],
+            "neighbor_expansion_ms": r.get("neighbor_expansion_ms", 0),
+            "diversity_ms": r.get("diversity_ms", 0),
             "ttft_ms": 0,
             "generation_ms": 0,
             "confidence_pct": r["confidence_pct"],
@@ -302,15 +308,17 @@ def ask(chat_id: str, body: schemas.AskRequest):
     t_gen = time.perf_counter()
     ttft = None
     parts: list[str] = []
+    usage: dict = {}
     try:
         for delta in s.answer_stream(
             r["search_query"], r["hits"], original_question=body.question,
-            verified_context=r["query_type"] != "NORMAL_QUERY",
+            verified_context=r["query_type"] != "NORMAL_QUERY", usage=usage,
         ):
             if ttft is None:
                 ttft = time.perf_counter() - t_gen
             parts.append(delta)
     except Exception as e:
+        langsmith_logging.fail_chat_turn(ls_run_id, f"Generation failed: {e}")
         raise HTTPException(status_code=502, detail=f"Generation failed: {e}")
 
     answer_text = "".join(parts)
@@ -319,9 +327,14 @@ def ask(chat_id: str, body: schemas.AskRequest):
     metrics = {
         "rewrite_ms": r["rewrite_ms"],
         "search_ms": r["search_ms"],
+        "neighbor_expansion_ms": r.get("neighbor_expansion_ms", 0),
+        "diversity_ms": r.get("diversity_ms", 0),
         "ttft_ms": ttft_ms,
         "generation_ms": generation_ms,
         "confidence_pct": r["confidence_pct"],
+        "input_tokens": usage.get("prompt_tokens"),
+        "output_tokens": usage.get("completion_tokens"),
+        "total_tokens": usage.get("total_tokens"),
     }
     # DeepEval/RAGAS scores are NOT computed here — human-in-the-loop: the UI
     # shows a "Calculate Metrics" button after the answer, and only clicking
@@ -334,7 +347,8 @@ def ask(chat_id: str, body: schemas.AskRequest):
     )
     db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics, message_id=message_id)
     langsmith_logging.log_generation(
-        ls_run_id, config.DEFAULT_MODEL, r["search_query"], answer_text, ttft_ms, generation_ms
+        ls_run_id, config.DEFAULT_MODEL, r["search_query"], answer_text, ttft_ms, generation_ms,
+        usage=usage,
     )
     langsmith_logging.end_chat_turn(ls_run_id, answer_text, contexts, metrics)
 
@@ -394,6 +408,7 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
     try:
         r = s.retrieve(chat_id, body.question, history)
     except NoDocumentError:
+        langsmith_logging.fail_chat_turn(ls_run_id, "NoDocumentError: chat has no uploaded file")
         raise HTTPException(
             status_code=400,
             detail="Upload a file for this chat first — each chat answers only "
@@ -404,6 +419,9 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
     langsmith_logging.log_retrieval(
         ls_run_id, r["search_query"], raw_contexts, r["search_ms"], contexts, r["rerank_ms"],
         diagnostics=r.get("retrieval_diagnostics"),
+        neighbor_expansion_ms=r.get("neighbor_expansion_ms", 0),
+        diversity_ms=r.get("diversity_ms", 0),
+        retrieval_meta=r.get("retrieval_meta"),
     )
 
     s.append_user_message(chat_id, body.question)
@@ -421,6 +439,8 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
             metrics = {
                 "rewrite_ms": r["rewrite_ms"],
                 "search_ms": r["search_ms"],
+                "neighbor_expansion_ms": r.get("neighbor_expansion_ms", 0),
+                "diversity_ms": r.get("diversity_ms", 0),
                 "ttft_ms": 0,
                 "generation_ms": 0,
                 "confidence_pct": r["confidence_pct"],
@@ -446,16 +466,18 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
         t_gen = time.perf_counter()
         ttft = None
         parts: list[str] = []
+        usage: dict = {}
         try:
             for delta in s.answer_stream(
             r["search_query"], r["hits"], original_question=body.question,
-            verified_context=r["query_type"] != "NORMAL_QUERY",
+            verified_context=r["query_type"] != "NORMAL_QUERY", usage=usage,
         ):
                 if ttft is None:
                     ttft = time.perf_counter() - t_gen
                 parts.append(delta)
                 yield sse({"type": "token", "text": delta})
         except Exception as e:
+            langsmith_logging.fail_chat_turn(ls_run_id, f"Generation failed: {e}")
             yield sse({"type": "error", "message": f"Generation failed: {e}"})
             return
 
@@ -465,9 +487,14 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
         metrics = {
             "rewrite_ms": r["rewrite_ms"],
             "search_ms": r["search_ms"],
+            "neighbor_expansion_ms": r.get("neighbor_expansion_ms", 0),
+            "diversity_ms": r.get("diversity_ms", 0),
             "ttft_ms": ttft_ms,
             "generation_ms": generation_ms,
             "confidence_pct": r["confidence_pct"],
+            "input_tokens": usage.get("prompt_tokens"),
+            "output_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
         }
         # DeepEval/RAGAS scores are NOT computed here — human-in-the-loop: the
         # UI shows a "Calculate Metrics" button after the answer, and only
@@ -480,7 +507,8 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
         )
         db.log_qa(chat_id, body.question, answer_text, r["sources"], metrics, message_id=message_id)
         langsmith_logging.log_generation(
-            ls_run_id, config.DEFAULT_MODEL, r["search_query"], answer_text, ttft_ms, generation_ms
+            ls_run_id, config.DEFAULT_MODEL, r["search_query"], answer_text, ttft_ms, generation_ms,
+            usage=usage,
         )
         langsmith_logging.end_chat_turn(ls_run_id, answer_text, contexts, metrics)
         yield sse({"type": "done", "metrics": metrics, "sources": r["sources"], "message_id": message_id})

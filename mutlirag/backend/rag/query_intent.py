@@ -24,6 +24,14 @@ from dataclasses import dataclass
 NORMAL_QUERY = "NORMAL_QUERY"
 TOC_QUERY = "TOC_QUERY"
 PAGE_QUERY = "PAGE_QUERY"
+# Not produced by detect_intent() below (it isn't a property of the question's
+# own wording — "more clearly" looks identical to any other short question
+# until you know what was just discussed). Set instead by
+# RagService.retrieve() once generator.classify_followup() recognizes the
+# question as asking to rephrase/elaborate/simplify the PREVIOUS answer
+# rather than asking something new about the document — see
+# RagService._retrieve_clarification.
+CLARIFY_QUERY = "CLARIFY_QUERY"
 
 
 @dataclass(frozen=True)
