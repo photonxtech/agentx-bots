@@ -1,0 +1,39 @@
+# ── Secrets ───────────────────────────────────────────────────────────────
+# .env holds live API keys and the database password. It must never be
+# committed: this repository is public, and a key pushed here is compromised
+# the moment it lands, even if a later commit removes it.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ── Runtime state (rebuilt, or user data that does not belong in git) ─────
+uploads/
+.rag_index_cache/
+.deepeval/
+.deepeval-cache/
+model_cache/
+chroma_db/
+*.sqlite3
+
+# ── CDK ───────────────────────────────────────────────────────────────────
+infra/cdk.out/
+infra/.venv/
+cdk.context.json
+
+# ── Editor / OS ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

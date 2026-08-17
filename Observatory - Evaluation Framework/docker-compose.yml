@@ -1,0 +1,44 @@
+# Local development stack. Mirrors the AWS topology closely enough to catch
+# container problems before they reach ECS: same image, same /data layout, a
+# real Postgres instead of RDS.
+#
+#   cp .env.example .env    # then fill in GROQ_API_KEY
+#   docker compose up --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rag_eval
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The app runs create_all() and safe_migrate() at import time, so it
+      # crashes if Postgres is not accepting connections yet. Gate on this.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag_eval"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/rag_eval
+      UPLOAD_DIR: /data/uploads
+      RAG_INDEX_CACHE_DIR: /data/index
+    env_file:
+      # Supplies GROQ_API_KEY and the other secrets. Not committed.
+      - .env
+    volumes:
+      - appdata:/data
+
+volumes:
+  pgdata:
+  appdata:

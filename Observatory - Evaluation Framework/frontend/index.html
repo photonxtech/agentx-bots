@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="RAG Evaluation UI — session-based pipeline evaluation tool for QA test generation and RAG configuration benchmarking.">
+    <title>Observatory — RAG Evaluation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Ambient aurora field. Purely decorative, behind everything, and the
+         first thing dropped under prefers-reduced-motion. -->
+    <div class="aurora" aria-hidden="true"></div>
+
+    <!-- ═══════════════════ SPLASH ═══════════════════
+         Dismissed by app.js once the first session fetch settles, with a
+         minimum dwell so it reads as an intro rather than a flash. The mark is
+         inline SVG — no external asset, so it works offline and stays crisp. -->
+    <div class="splash" id="splash">
+        <div class="splash-mark">
+            <svg width="120" height="120" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+                <defs>
+                    <linearGradient id="jade" x1="0" y1="0" x2="120" y2="120">
+                        <stop stop-color="#2dd4bf"/><stop offset="0.55" stop-color="#14b8a6"/><stop offset="1" stop-color="#8b7bf7"/>
+                    </linearGradient>
+                </defs>
+                <circle class="sp-ring" cx="60" cy="60" r="52" stroke="url(#jade)" stroke-width="1.2"
+                        stroke-dasharray="6 10" opacity="0.55"/>
+                <circle class="sp-ring-2" cx="60" cy="60" r="40" stroke="url(#jade)" stroke-width="1"
+                        stroke-dasharray="3 14" opacity="0.4"/>
+                <circle class="sp-core" cx="60" cy="60" r="25" stroke="url(#jade)" stroke-width="2"/>
+                <g class="sp-bar" stroke="url(#jade)" stroke-width="3" stroke-linecap="round">
+                    <path d="M48 54h24"/><path d="M48 62h16"/><path d="M48 70h20"/>
+                </g>
+            </svg>
+        </div>
+        <div class="splash-word">Observ<b>atory</b></div>
+        <div class="splash-tag">RAG Evaluation Suite</div>
+        <div class="splash-load"><i></i></div>
+    </div>
+
+    <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <svg width="26" height="26" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+                    <defs><linearGradient id="logo-grad" x1="0" y1="0" x2="120" y2="120">
+                        <stop stop-color="#2dd4bf"/><stop offset="1" stop-color="#8b7bf7"/>
+                    </linearGradient></defs>
+                    <circle cx="60" cy="60" r="52" stroke="url(#logo-grad)" stroke-width="5" stroke-dasharray="8 12" opacity="0.6"/>
+                    <circle cx="60" cy="60" r="27" stroke="url(#logo-grad)" stroke-width="7"/>
+                    <g stroke="url(#logo-grad)" stroke-width="8" stroke-linecap="round">
+                        <path d="M48 54h24"/><path d="M48 66h14"/>
+                    </g>
+                </svg>
+                <span>Observatory</span>
+            </div>
+            <button class="btn-new-session" id="btnNewSession" title="New Session">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 3v12M3 9h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+        </div>
+        <div class="rail-label">History</div>
+        <div class="session-list" id="sessionList">
+            <!-- Sessions populated by JS -->
+            <div class="empty-state" id="emptyState">
+                <p>No sessions yet</p>
+                <p class="subtle">Click + to create one</p>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
+    <main class="main-content" id="mainContent">
+
+        <!-- Welcome screen (no session selected) -->
+        <div class="welcome-screen" id="welcomeScreen">
+            <div class="welcome-icon">
+                <svg width="92" height="92" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+                    <defs><linearGradient id="welcome-grad" x1="0" y1="0" x2="120" y2="120">
+                        <stop stop-color="#2dd4bf"/><stop offset="1" stop-color="#8b7bf7"/>
+                    </linearGradient></defs>
+                    <circle cx="60" cy="60" r="52" stroke="url(#welcome-grad)" stroke-width="1.5" stroke-dasharray="6 10" opacity="0.45"/>
+                    <circle cx="60" cy="60" r="27" stroke="url(#welcome-grad)" stroke-width="2.5"/>
+                    <g stroke="url(#welcome-grad)" stroke-width="3" stroke-linecap="round">
+                        <path d="M48 54h24"/><path d="M48 62h16"/><path d="M48 70h20"/>
+                    </g>
+                </svg>
+            </div>
+            <h1>The <b>Observatory</b></h1>
+            <p>Upload a corpus, synthesise a golden test set, then measure a RAG
+               configuration against it — and tell us whether the numbers deserve
+               to be believed.</p>
+            <button class="btn-primary" onclick="document.getElementById('btnNewSession').click()">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                New Session
+            </button>
+        </div>
+
+        <!-- Session workspace (visible when session is active) -->
+        <div class="session-workspace" id="sessionWorkspace" style="display: none;">
+
+            <!-- Session header. Belongs to the full view — the guided flow is a
+                 modal that covers it, and carries its own top bar. -->
+            <div class="session-header">
+                <h2 id="sessionTitle">Session</h2>
+                <div class="header-actions">
+                    <button class="btn-ghost btn-small" id="btnWizardJump" type="button"
+                            style="display:none" title="Return to the guided flow">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2l6 4-6 4-6-4 6-4zM2 10l6 4 6-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Guided flow
+                    </button>
+                </div>
+            </div>
+
+            <!-- Read-only recap of what produced the results below. Review mode
+                 hides the input stages entirely, so this is what keeps the
+                 numbers attributable to a corpus and a test set. -->
+            <div class="review-summary" id="reviewSummary"></div>
+
+            <!-- ─── Guided flow ────────────────────────────────────────────
+                 Until the session is finished this is a modal card over a
+                 blurred backdrop: the five stages and nothing else. Pressing
+                 Finish drops `body.mode-wizard`, at which point the very same
+                 markup lays itself out flat as the full view — so the guided
+                 flow and the review view can never show different data. -->
+            <div class="wizard-overlay" id="wizardOverlay">
+            <div class="wizard-modal" id="wizardModal">
+                <div class="wizard-topbar">
+                    <div class="wizard-brand">
+                        <!-- Its own gradient def: the sidebar's is inside an element
+                             this modal hides, and a hidden paint server is not
+                             reliably resolvable. -->
+                        <svg width="22" height="22" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+                            <defs><linearGradient id="wiz-grad" x1="0" y1="0" x2="120" y2="120">
+                                <stop stop-color="#2dd4bf"/><stop offset="1" stop-color="#8b7bf7"/>
+                            </linearGradient></defs>
+                            <circle cx="60" cy="60" r="52" stroke="url(#wiz-grad)" stroke-width="5" stroke-dasharray="8 12" opacity="0.6"/>
+                            <circle cx="60" cy="60" r="27" stroke="url(#wiz-grad)" stroke-width="7"/>
+                            <g stroke="url(#wiz-grad)" stroke-width="8" stroke-linecap="round">
+                                <path d="M48 54h24"/><path d="M48 66h14"/>
+                            </g>
+                        </svg>
+                        <span class="wizard-brand-text">
+                            <b>Set up your evaluation</b>
+                            <i id="wizardSessionTitle">Session</i>
+                        </span>
+                    </div>
+                    <div class="wizard-topbar-right">
+                        <span class="wizard-count" id="wizardStageCount">1 / 5</span>
+                        <!-- Escape hatch: reviewers who just want the history and
+                             the data can leave the flow at any point. -->
+                        <button class="btn-ghost btn-small" id="btnHistoryJump" type="button"
+                                title="Leave the guided flow and view history and results">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                            Full view
+                        </button>
+                    </div>
+                </div>
+                <div class="wizard-progress" aria-hidden="true"><i id="wizardProgressBar"></i></div>
+
+            <div class="wizard" id="wizard">
+                <aside class="stage-rail" id="stageRail">
+                    <div class="rail-intro">Get started by measuring one RAG configuration end to end.</div>
+                    <button class="rail-step" data-stage="1" type="button">
+                        <span class="rail-dot"><span class="rail-num">1</span></span>
+                        <span class="rail-text">
+                            <span class="rail-title">Documents</span>
+                            <span class="rail-desc">Upload the corpus your RAG system will answer from.</span>
+                        </span>
+                    </button>
+                    <button class="rail-step" data-stage="2" type="button">
+                        <span class="rail-dot"><span class="rail-num">2</span></span>
+                        <span class="rail-text">
+                            <span class="rail-title">Test Set</span>
+                            <span class="rail-desc">Synthesise golden question/answer pairs from that corpus.</span>
+                        </span>
+                    </button>
+                    <button class="rail-step" data-stage="3" type="button">
+                        <span class="rail-dot"><span class="rail-num">3</span></span>
+                        <span class="rail-text">
+                            <span class="rail-title">Configuration</span>
+                            <span class="rail-desc">Choose the pipeline settings to put under test.</span>
+                        </span>
+                    </button>
+                    <button class="rail-step" data-stage="4" type="button">
+                        <span class="rail-dot"><span class="rail-num">4</span></span>
+                        <span class="rail-text">
+                            <span class="rail-title">Analytics</span>
+                            <span class="rail-desc">The measured result for this configuration.</span>
+                        </span>
+                    </button>
+                    <button class="rail-step" data-stage="5" type="button">
+                        <span class="rail-dot"><span class="rail-num">5</span></span>
+                        <span class="rail-text">
+                            <span class="rail-title">Feedback</span>
+                            <span class="rail-desc">Tell us whether the numbers deserve to be believed.</span>
+                        </span>
+                    </button>
+                </aside>
+
+                <div class="stage-host" id="stageHost">
+
+                <section class="stage" data-stage="1">
+                    <div class="stage-head">
+                        <span class="stage-eyebrow">Stage 1 of 5</span>
+                        <h3 class="stage-title">Upload your documents</h3>
+                        <p class="stage-lede">Everything downstream is measured against this corpus. Several
+                           files are fine — each is chunked separately so no chunk ever spans two documents.</p>
+                    </div>
+                <div class="card upload-card">
+                    <div class="card-header">
+                        <h3>📄 Upload Document</h3>
+                    </div>
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-icon">
+                            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                                <path d="M24 32V16M24 16l-8 8M24 16l8 8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M8 32v4a4 4 0 004 4h24a4 4 0 004-4v-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <p>Drag &amp; drop your documents here</p>
+                        <p class="subtle">or click to browse — several files at once are fine</p>
+                        <input type="file" id="fileInput" hidden multiple accept=".pdf,.txt,.docx,.md,.csv">
+                    </div>
+                    <!-- Populated by renderDocumentList(); one row per uploaded file -->
+                    <div class="doc-list" id="documentList" style="display: none;"></div>
+                </div>
+
+                    <div class="stage-foot">
+                        <span class="stage-hint" data-hint="1">Upload at least one document to continue.</span>
+                        <button class="btn-primary stage-next" data-goto="2" type="button">Continue &rarr;</button>
+                    </div>
+                </section>
+
+                <section class="stage" data-stage="2">
+                    <div class="stage-head">
+                        <span class="stage-eyebrow">Stage 2 of 5</span>
+                        <h3 class="stage-title">Generate the golden test set</h3>
+                        <p class="stage-lede">DeepEval drafts questions from your corpus, writes reference
+                           answers, hardens each along an evolution axis, and has a critic re-roll weak ones.
+                           Roughly 15&ndash;17 LLM calls per question, so start small.</p>
+                    </div>
+                <div class="card generate-card">
+                    <div class="card-header" style="display: flex; align-items: center; justify-content: space-between;">
+                        <h3>⚡ Generate QA Test Cases</h3>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <!-- Default 6, not 15: both frameworks cost ~15-17 LLM calls
+                                 per question, so 15 questions is ~10 minutes. -->
+                            <label for="numQuestions" class="subtle" style="margin: 0; font-size: 12px; font-weight: 500;">Count:</label>
+                            <input type="number" id="numQuestions" value="6" min="1" max="100" title="Each question costs roughly 15-17 LLM calls, so large counts take many minutes." style="width: 70px; padding: 8px 12px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--text-primary); font-family: var(--font); outline: none;">
+                            <button class="btn-primary" id="btnGenerate" disabled>
+                                <span class="btn-text">Generate</span>
+                                <span class="btn-loader" style="display:none;"></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="qa-preview" id="qaPreview" style="display: none;">
+                        <div class="qa-stats">
+                            <span id="qaCount">0 test cases generated</span>
+                        </div>
+                        <!-- Which generator produced this set, plus any caveats. -->
+                        <div id="qaProvenance" style="display: none;"></div>
+                        <div class="qa-table-wrapper">
+                            <table class="data-table" id="qaPreviewTable">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Question</th>
+                                        <th>Expected Answer</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="qaPreviewBody">
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="qa-actions">
+                            <button class="btn-secondary" id="btnDownloadQA">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v9M8 11l-3-3M8 11l3-3M2 13h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                Download JSON
+                            </button>
+                            <button class="btn-primary" id="btnNextStep">
+                                Next →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                    <div class="stage-foot">
+                        <button class="btn-ghost stage-back" data-goto="1" type="button">&larr; Back</button>
+                        <span class="stage-hint" data-hint="2">Generate a test set to continue.</span>
+                        <button class="btn-primary stage-next" data-goto="3" type="button">Continue &rarr;</button>
+                    </div>
+                </section>
+
+                <section class="stage" data-stage="3">
+                    <div class="stage-head">
+                        <span class="stage-eyebrow">Stage 3 of 5</span>
+                        <h3 class="stage-title">Choose the configuration to test</h3>
+                        <p class="stage-lede">These settings decide what gets retrieved and how the answer is
+                           written. Change one at a time if you want the score delta to mean something.</p>
+                    </div>
+                <div class="card config-card">
+                    <div class="card-header">
+                        <h3>⚙️ RAG Configuration</h3>
+                    </div>
+                    <form id="configForm" class="config-form">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="chatModel">Chat Model</label>
+                                <select id="chatModel" required>
+                                    <optgroup label="Large — best quality">
+                                        <option value="openai/gpt-oss-120b">GPT-OSS 120B · 131k ctx</option>
+                                    </optgroup>
+                                    <optgroup label="Small — fast &amp; cheap">
+                                        <option value="openai/gpt-oss-20b">GPT-OSS 20B · 131k ctx</option>
+                                    </optgroup>
+                                    <optgroup label="Other">
+                                        <option value="qwen/qwen3.6-27b">Qwen 3.6 27B · 131k ctx</option>
+                                        <option value="allam-2-7b">ALLaM 2 7B · Arabic · 4k ctx</option>
+                                    </optgroup>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="embeddingModel">Embedding Model</label>
+                                <select id="embeddingModel" required>
+                                    <optgroup label="English — small &amp; fast">
+                                        <option value="BAAI/bge-small-en-v1.5">BGE bge-small-en-v1.5 · 384d · 0.067GB</option>
+                                        <option value="snowflake/snowflake-arctic-embed-xs">arctic-embed-xs · 384d · 0.09GB</option>
+                                        <option value="sentence-transformers/all-MiniLM-L6-v2">all-MiniLM-L6-v2 · 384d · 0.09GB</option>
+                                        <option value="BAAI/bge-small-en">BGE bge-small-en · 384d · 0.13GB</option>
+                                        <option value="snowflake/snowflake-arctic-embed-s">arctic-embed-s · 384d · 0.13GB</option>
+                                    </optgroup>
+                                    <optgroup label="English — balanced">
+                                        <option value="BAAI/bge-base-en-v1.5">BGE bge-base-en-v1.5 · 768d · 0.21GB</option>
+                                        <option value="BAAI/bge-base-en">BGE bge-base-en · 768d · 0.42GB</option>
+                                        <option value="snowflake/snowflake-arctic-embed-m">arctic-embed-m · 768d · 0.43GB</option>
+                                        <option value="thenlper/gte-base">gte-base · 768d · 0.44GB</option>
+                                    </optgroup>
+                                    <optgroup label="English — large (best quality)">
+                                        <option value="mixedbread-ai/mxbai-embed-large-v1">mxbai-embed-large-v1 · 1024d · 0.64GB</option>
+                                        <option value="snowflake/snowflake-arctic-embed-l">arctic-embed-l · 1024d · 1.02GB</option>
+                                        <option value="BAAI/bge-large-en-v1.5">BGE bge-large-en-v1.5 · 1024d · 1.2GB</option>
+                                        <option value="thenlper/gte-large">gte-large · 1024d · 1.2GB</option>
+                                    </optgroup>
+                                    <optgroup label="Long context (8k tokens)">
+                                        <option value="jinaai/jina-embeddings-v2-small-en">Jina embeddings-v2-small-en · 512d · 0.12GB</option>
+                                        <option value="nomic-ai/nomic-embed-text-v1.5-Q">Nomic embed-text-v1.5-Q · 768d · 0.13GB</option>
+                                        <option value="jinaai/jina-embeddings-v2-base-en">Jina embeddings-v2-base-en · 768d · 0.52GB</option>
+                                        <option value="nomic-ai/nomic-embed-text-v1.5">Nomic embed-text-v1.5 · 768d · 0.52GB</option>
+                                        <option value="nomic-ai/nomic-embed-text-v1">Nomic embed-text-v1 · 768d · 0.52GB</option>
+                                        <option value="snowflake/snowflake-arctic-embed-m-long">arctic-embed-m-long · 768d · 0.54GB</option>
+                                    </optgroup>
+                                    <optgroup label="Multilingual">
+                                        <option value="BAAI/bge-small-zh-v1.5">BGE bge-small-zh-v1.5 · Chinese · 512d · 0.09GB</option>
+                                        <option value="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2">paraphrase-multilingual-MiniLM-L12-v2 · ~50 langs · 384d · 0.22GB</option>
+                                        <option value="jinaai/jina-embeddings-v2-base-de">Jina embeddings-v2-base-de · German · 768d · 0.32GB</option>
+                                        <option value="jinaai/jina-embeddings-v2-base-es">Jina embeddings-v2-base-es · Spanish · 768d · 0.64GB</option>
+                                        <option value="jinaai/jina-embeddings-v2-base-zh">Jina embeddings-v2-base-zh · Chinese · 768d · 0.64GB</option>
+                                        <option value="sentence-transformers/paraphrase-multilingual-mpnet-base-v2">paraphrase-multilingual-mpnet-base-v2 · ~50 langs · 768d · 1.0GB</option>
+                                        <option value="intfloat/multilingual-e5-large">multilingual-e5-large · ~100 langs · 1024d · 2.24GB</option>
+                                        <option value="jinaai/jina-embeddings-v3">Jina embeddings-v3 · ~100 langs · 1024d · 2.29GB</option>
+                                    </optgroup>
+                                    <optgroup label="Code">
+                                        <option value="jinaai/jina-embeddings-v2-base-code">Jina embeddings-v2-base-code · 768d · 0.64GB</option>
+                                    </optgroup>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="chunkSize">Chunk Size</label>
+                                <input type="number" id="chunkSize" value="512" min="100" max="10000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="chunkOverlap">Chunk Overlap</label>
+                                <input type="number" id="chunkOverlap" value="50" min="0" max="5000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="rerankerModel">Reranker Model</label>
+                                <select id="rerankerModel">
+                                    <option value="">None</option>
+                                    <optgroup label="English">
+                                        <option value="Xenova/ms-marco-MiniLM-L-6-v2">ms-marco-MiniLM-L-6-v2 · 0.08GB</option>
+                                        <option value="Xenova/ms-marco-MiniLM-L-12-v2">ms-marco-MiniLM-L-12-v2 · 0.12GB</option>
+                                        <option value="jinaai/jina-reranker-v1-tiny-en">jina-reranker-v1-tiny-en · 0.13GB</option>
+                                        <option value="jinaai/jina-reranker-v1-turbo-en">jina-reranker-v1-turbo-en · 0.15GB</option>
+                                        <option value="BAAI/bge-reranker-base">bge-reranker-base · 1.04GB</option>
+                                    </optgroup>
+                                    <optgroup label="Multilingual">
+                                        <option value="jinaai/jina-reranker-v2-base-multilingual">jina-reranker-v2-base-multilingual · 1.11GB</option>
+                                    </optgroup>
+                                </select>
+                            </div>
+                            <div class="form-group form-group-wide">
+                                <label>Search Type</label>
+                                <div class="radio-group">
+                                    <label class="radio-label">
+                                        <input type="radio" name="searchType" value="keyword"> Keyword
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="searchType" value="semantic" checked> Semantic
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="searchType" value="hybrid"> Hybrid
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="topK">Top K</label>
+                                <input type="number" id="topK" value="5" min="1" max="100" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="temperature">Temperature <span class="temp-value" id="tempValue">0.7</span></label>
+                                <input type="range" id="temperature" min="0" max="2" step="0.1" value="0.7" class="slider">
+                            </div>
+                        </div>
+
+                        <!-- Recorded on the run for reference, but deliberately kept out of the
+                             grid above: these are storage/scale choices. With the same embedding
+                             model and top_k, every backend returns the same neighbours, so they
+                             cannot move the scores. -->
+                        <details class="infra-section">
+                            <summary>
+                                Infrastructure
+                                <span class="infra-note">recorded only — does not affect scores</span>
+                            </summary>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="vectordb">Vector DB</label>
+                                    <select id="vectordb" required>
+                                        <option value="chromadb">ChromaDB</option>
+                                        <option value="pgvector">PGVector</option>
+                                        <option value="pinecone">Pinecone</option>
+                                        <option value="weaviate">Weaviate</option>
+                                        <option value="qdrant">Qdrant</option>
+                                        <option value="milvus">Milvus</option>
+                                        <option value="faiss">FAISS</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" id="indexTypeGroup">
+                                    <label for="indexType">Index Type</label>
+                                    <select id="indexType">
+                                        <option value="">Select...</option>
+                                        <option value="hnsw">HNSW</option>
+                                        <option value="ivf">IVF</option>
+                                        <option value="pq">PQ</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <p class="infra-explainer">
+                                Retrieval always runs on ChromaDB with its own index. These fields are stored
+                                with the run so you can label an experiment, but two runs differing only here
+                                are the <strong>same pipeline</strong> — any score difference between them is
+                                judge noise, not a real comparison.
+                            </p>
+                        </details>
+
+                        <div class="form-actions">
+                            <button type="submit" class="btn-primary btn-run" id="btnRunEval">
+                                <span class="btn-text">🚀 Run Evaluation</span>
+                                <span class="btn-loader" style="display:none;"></span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                    <div class="stage-foot">
+                        <button class="btn-ghost stage-back" data-goto="2" type="button">&larr; Back</button>
+                        <span class="stage-hint" data-hint="3">Run an evaluation to see the analytics.</span>
+                        <button class="btn-ghost stage-next" data-goto="4" type="button">Skip to analytics &rarr;</button>
+                    </div>
+                </section>
+
+                <section class="stage" data-stage="4">
+                    <div class="stage-head">
+                        <span class="stage-eyebrow">Stage 4 of 5</span>
+                        <h3 class="stage-title">Analytics</h3>
+                        <p class="stage-lede">Scored by DeepEval over the whole test set as one batch. Coverage
+                           is stated on every tile, so a partial average can never read as a full one.</p>
+                    </div>
+
+                    <!-- New results appear here -->
+                    <div id="newRunResults"></div>
+                    <!-- Previous run results (loaded on revisit) -->
+                    <div id="previousRuns"></div>
+                    <div class="stage-empty" id="analyticsEmpty">
+                        <p>No evaluation yet.</p>
+                        <p class="subtle">Run one from the configuration stage and the result appears here.</p>
+                    </div>
+
+                    <div class="stage-foot">
+                        <button class="btn-ghost stage-back" data-goto="3" type="button">&larr; Back</button>
+                        <span class="stage-hint" data-hint="4">Run an evaluation to continue.</span>
+                        <button class="btn-primary stage-next" data-goto="5" type="button">Continue &rarr;</button>
+                    </div>
+                </section>
+
+                <section class="stage" data-stage="5">
+                    <div class="stage-head">
+                        <span class="stage-eyebrow">Final stage</span>
+                        <h3 class="stage-title">Do these results look right?</h3>
+                        <p class="stage-lede">Every score came from one model judging another against
+                           machine-written ground truth. Nothing in that loop can tell us whether the numbers
+                           match reality &mdash; you are the only human check there is.</p>
+                    </div>
+
+                    <!-- Feedback panel for the most recent run, rendered by JS -->
+                    <div id="feedbackStageHost"></div>
+
+                    <div class="stage-foot">
+                        <button class="btn-ghost stage-back" data-goto="4" type="button">&larr; Back</button>
+                        <span class="stage-hint" data-hint="5">Rate the run, then finish.</span>
+                        <button class="btn-primary btn-finish" id="btnFinish" type="button">Finish &amp; view full session</button>
+                    </div>
+                </section>
+
+                </div><!-- /stage-host -->
+            </div><!-- /wizard -->
+            </div><!-- /wizard-modal -->
+            </div><!-- /wizard-overlay -->
+
+        </div>
+
+    </main>
+
+    <!-- ═══════════════════ MANDATORY FEEDBACK MODAL ═══════════════════ -->
+    <!-- Opens automatically when an evaluation finishes. Deliberately has no
+         close button, no backdrop dismiss and no Esc handler: submitting a
+         rating is the only way out. An escape hatch appears only if the save
+         itself fails, so a backend outage can never trap the user. -->
+    <div class="fb-modal-overlay" id="fbModalOverlay" style="display: none;">
+        <div class="fb-modal" role="dialog" aria-modal="true" aria-labelledby="fbModalTitle">
+            <div class="fb-modal-head">
+                <div class="fb-modal-icon" aria-hidden="true">⚠</div>
+                <div class="fb-modal-headtext">
+                    <span class="fb-modal-badge">Action required</span>
+                    <h3 id="fbModalTitle">This run is unverified until you rate it</h3>
+                    <p>Every score above came from one model judging another against
+                       machine-written ground truth. <strong>Nothing in that loop can tell us
+                       whether the numbers match reality.</strong> You are the only human check
+                       there is.</p>
+                </div>
+            </div>
+
+            <div class="fb-modal-scores" id="fbModalScores"></div>
+
+            <!-- The evidence behind those scores. Asking "do these numbers look
+                 right?" is unanswerable without the answers they scored, so the
+                 test cases sit between the totals and the thumbs — read first,
+                 rate second. -->
+            <div id="fbModalCases"></div>
+
+            <div class="fb-modal-body">
+                <div class="fb-modal-actions">
+                    <button class="fb-thumb up" id="fbModalUp" data-rating="up">👍 Looks right</button>
+                    <button class="fb-thumb down" id="fbModalDown" data-rating="down">👎 Something's off</button>
+                </div>
+
+                <label class="fb-label" for="fbModalComment">Your comments</label>
+                <textarea class="fb-comment" id="fbModalComment" rows="3"
+                    placeholder="What specifically was right or wrong? e.g. 'faithfulness says 91% but two answers invented figures that aren't in the context'. Concrete detail is what makes this actionable."></textarea>
+
+                <div class="fb-label fb-label-tags">Which part? <span class="fb-optional">optional</span></div>
+                <div class="fb-aspects" id="fbModalAspects"></div>
+
+                <div class="fb-modal-foot">
+                    <span class="fb-hint" id="fbModalHint">Pick 👍 or 👎 above to continue.</span>
+                    <button class="fb-submit" id="fbModalSubmit" disabled>Submit feedback</button>
+                </div>
+                <div class="fb-modal-escape" id="fbModalEscape" style="display: none;">
+                    <button class="fb-escape-btn" id="fbModalEscapeBtn">Continue without saving</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
