@@ -114,6 +114,11 @@ class MessageNotFoundError(Exception):
     """Raised when an operation targets a message id that does not exist in the chat."""
 
 
+class TooManyDocumentsError(Exception):
+    """Raised when an upload would exceed config.MAX_DOCUMENTS_PER_CHAT and
+    isn't just replacing a same-named file already in the chat."""
+
+
 class RagService:
     """Owns the shared vector store + chat registry for the whole process."""
 
@@ -158,7 +163,7 @@ class RagService:
             chat_store.delete_chat(self.chats, chat_id)
 
     def _annotate(self, chat: dict) -> dict:
-        """Attach file / chunk_count / message_count to a raw chat dict."""
+        """Attach file(s) / chunk_count / message_count to a raw chat dict."""
         cid = chat["id"]
         srcs = self.store.sources_for_chat(cid)
         return {
@@ -167,7 +172,12 @@ class RagService:
             "created_at": chat.get("created_at", ""),
             "updated_at": chat.get("updated_at", ""),
             "message_count": len(chat.get("messages", [])),
+            # "file" kept for backward compatibility with callers expecting a
+            # single filename (first-uploaded document); "files" is the full
+            # list for chats holding more than one (see
+            # config.MAX_DOCUMENTS_PER_CHAT).
             "file": srcs[0] if srcs else None,
+            "files": srcs,
             "chunk_count": self.store.size_for_chat(cid),
         }
 
@@ -190,6 +200,7 @@ class RagService:
         Mirrors app.index_file_for_chat, minus the Streamlit status widget.
         """
         self.get_chat(chat_id)  # validate chat exists (raises ChatNotFoundError)
+        self._check_document_cap(chat_id, filename)  # fail fast, before any parsing/OCR cost
 
         docs = ingestion.ingest_cached(file_bytes, filename)
         chunks = chunking.chunk_documents(docs)
@@ -207,7 +218,7 @@ class RagService:
 
         # Index write — serialize against other writers/searchers.
         with self._lock:
-            replaced = self._replace_existing_file(chat_id)
+            replaced = self._replace_matching_file(chat_id, filename)
             self.store.add(chunks)
             self.store.save(config.INDEX_DIR)
             indexed = self.store.size_for_chat(chat_id)
@@ -224,27 +235,46 @@ class RagService:
             "message": message,
         }
 
-    def _replace_existing_file(self, chat_id: str) -> str | None:
-        """A chat holds exactly one file at a time (see chat_file/_annotate) —
-        uploading a new one REPLACES whatever was there, instead of
+    def _check_document_cap(self, chat_id: str, filename: str) -> None:
+        """Raise TooManyDocumentsError before any parsing/OCR/vision cost is
+        spent, if this upload would push the chat past
+        config.MAX_DOCUMENTS_PER_CHAT and isn't just replacing a file of the
+        same name already in the chat (a same-named re-upload never adds to
+        the count — see _replace_matching_file)."""
+        existing = self.store.sources_for_chat(chat_id)
+        if filename not in existing and len(existing) >= config.MAX_DOCUMENTS_PER_CHAT:
+            raise TooManyDocumentsError(
+                f"This chat already has {len(existing)} document(s) "
+                f"(limit {config.MAX_DOCUMENTS_PER_CHAT}). Remove one before "
+                f"uploading a new one."
+            )
+
+    def _replace_matching_file(self, chat_id: str, filename: str) -> str | None:
+        """A chat can hold several distinct documents at once (up to
+        config.MAX_DOCUMENTS_PER_CHAT) — but re-uploading a file with the
+        SAME name as one already in the chat replaces that one, instead of
         accumulating alongside it. Without this, re-uploading the same file
         (or a revised version of it) leaves the old chunks in the index
         forever, so the same content ends up indexed multiple times and
-        duplicate chunks compete for retrieval's top_k slots.
+        duplicate chunks compete for retrieval's top_k slots. A genuinely
+        different filename is left untouched — see _check_document_cap for
+        the count limit on those.
 
         Must be called under self._lock, after confirming the new upload
         actually produced chunks (never delete the old file over a failed
         upload) and before the new ones are added. Returns the removed
-        filename, or None if the chat had no file yet.
+        filename, or None if no existing file had this name.
         """
         existing = self.store.sources_for_chat(chat_id)
-        for src in existing:
-            self.store.remove_source(src, chat_id=chat_id)
-        return existing[0] if existing else None
+        if filename in existing:
+            self.store.remove_source(filename, chat_id=chat_id)
+            return filename
+        return None
 
     def ingest_file_stream(self, chat_id: str, file_bytes: bytes, filename: str):
         """Generator yielding real-time indexing progress events (0-100%, stage, ETA)."""
         self.get_chat(chat_id)
+        self._check_document_cap(chat_id, filename)  # fail fast, before any parsing/OCR cost
 
         start_time = time.time()
         parse_times = []
@@ -336,7 +366,7 @@ class RagService:
             })
 
         with self._lock:
-            replaced = self._replace_existing_file(chat_id)
+            replaced = self._replace_matching_file(chat_id, filename)
             self.store.add(chunks, progress_callback=on_embed_progress)
             self.store.save(config.INDEX_DIR)
             indexed = self.store.size_for_chat(chat_id)
@@ -396,9 +426,9 @@ class RagService:
         intent = detect_intent(question)
 
         if intent.kind == TOC_QUERY:
-            return self._retrieve_toc(chat_id)
+            return self._retrieve_toc(chat_id, question)
         if intent.kind == PAGE_QUERY:
-            return self._retrieve_pages(chat_id, intent.pages)
+            return self._retrieve_pages(chat_id, intent.pages, question)
 
         logger.info("query_type=%s exclude_toc=%s", NORMAL_QUERY, config.EXCLUDE_INDEX_PAGES)
 
@@ -599,7 +629,12 @@ class RagService:
             parent_text = d.meta.get("parent_text") or d.text
             rows.append({
                 "rank": rank,
-                "chunk_id": f"{d.meta.get('page')}:{d.meta.get('chunk')}:{d.meta.get('child')}",
+                # Source-prefixed: with multiple documents in one chat (see
+                # config.MAX_DOCUMENTS_PER_CHAT), two different documents can
+                # both have a "page 6" — without the source prefix that would
+                # be ambiguous in this table.
+                "chunk_id": f"{d.source}:{d.meta.get('page')}:{d.meta.get('chunk')}:{d.meta.get('child')}",
+                "source": d.source,
                 "page": d.meta.get("page"),
                 "section": d.meta.get("section") or "",
                 "chunk_type": d.meta.get("chunk_type", "?"),
@@ -616,7 +651,7 @@ class RagService:
                 # confirms whether the LLM actually got the wider parent_text
                 # instead of just the narrow child match that scored well —
                 # false for chunks indexed before parent-child chunking existed.
-                "parent_id": f"{d.meta.get('page')}:{d.meta.get('chunk')}",
+                "parent_id": f"{d.source}:{d.meta.get('page')}:{d.meta.get('chunk')}",
                 "child_index": d.meta.get("child"),
                 "child_chars": len(d.text),
                 "parent_chars": len(parent_text),
@@ -664,12 +699,18 @@ class RagService:
             for i, (d, s) in enumerate(hits, 1)
         ]
 
-    def _retrieve_toc(self, chat_id: str) -> dict:
+    def _retrieve_toc(self, chat_id: str, question: str = "") -> dict:
         """Deterministic TOC retrieval (TOC_QUERY): pull every chunk from
         pages flagged TOC/index for this chat, in page order, bypassing the
         exclusion mask entirely — "give me the TOC" is a structural request,
         not a semantic-similarity one, so it shouldn't depend on whether
         embedding/BM25 search happens to rank the TOC page highly.
+
+        A chat can hold several documents (config.MAX_DOCUMENTS_PER_CHAT) —
+        if more than one has TOC content and the question doesn't name a
+        specific one (see _detect_named_source), asking which document is
+        meant is safer than silently merging two unrelated tables of
+        contents into one answer or guessing wrong.
         """
         t0 = time.perf_counter()
         with self._lock:
@@ -677,6 +718,18 @@ class RagService:
         search_ms = int((time.perf_counter() - t0) * 1000)
         logger.info("query_type=%s toc_pages=%s", TOC_QUERY,
                     sorted({d.meta.get("page") for d in toc_docs if d.meta.get("page") is not None}))
+
+        sources_with_toc = sorted({d.source for d in toc_docs})
+        if len(sources_with_toc) > 1:
+            named = self._detect_named_source(chat_id, question)
+            if named in sources_with_toc:
+                toc_docs = [d for d in toc_docs if d.source == named]
+            else:
+                return self._ambiguous_document_answer(
+                    TOC_QUERY, sources_with_toc,
+                    "This chat has a table of contents in more than one document",
+                    rewrite_ms=0, search_ms=search_ms,
+                )
 
         hits = [(d, 1.0) for d in toc_docs]
         direct_answer = None
@@ -700,11 +753,16 @@ class RagService:
             "direct_answer": direct_answer,
         }
 
-    def _retrieve_pages(self, chat_id: str, pages: list[int]) -> dict:
+    def _retrieve_pages(self, chat_id: str, pages: list[int], question: str = "") -> dict:
         """Deterministic page retrieval (PAGE_QUERY): pull exactly the
         requested page(s) for this chat, regardless of is_index — an
         explicit page request always wins over the generic TOC-exclusion
         rule for NORMAL_QUERY.
+
+        Same multi-document disambiguation as _retrieve_toc: if the
+        requested page number exists in more than one of this chat's
+        documents and the question doesn't name one, ask instead of
+        returning a merged/ambiguous answer.
         """
         t0 = time.perf_counter()
         with self._lock:
@@ -712,6 +770,19 @@ class RagService:
         search_ms = int((time.perf_counter() - t0) * 1000)
         logger.info("query_type=%s requested_pages=%s found_chunks=%d",
                     PAGE_QUERY, pages, len(page_docs))
+
+        sources_with_pages = sorted({d.source for d in page_docs})
+        if len(sources_with_pages) > 1:
+            named = self._detect_named_source(chat_id, question)
+            if named in sources_with_pages:
+                page_docs = [d for d in page_docs if d.source == named]
+            else:
+                pages_str = ", ".join(str(p) for p in pages)
+                return self._ambiguous_document_answer(
+                    PAGE_QUERY, sources_with_pages,
+                    f"Page(s) {pages_str} exist in more than one document in this chat",
+                    rewrite_ms=0, search_ms=search_ms,
+                )
 
         hits = [(d, 1.0) for d in page_docs]
         direct_answer = None
@@ -733,6 +804,48 @@ class RagService:
             "direct_answer": direct_answer,
         }
 
+    def _ambiguous_document_answer(
+        self, query_type: str, candidate_sources: list[str], reason: str,
+        rewrite_ms: int, search_ms: int,
+    ) -> dict:
+        """A TOC/PAGE request matched more than one of this chat's documents
+        and didn't name one — answer with a clarifying question instead of
+        guessing or merging two documents' structural content together,
+        neither of which is safe: a wrong guess is indistinguishable from a
+        confident hallucination, and a silent merge risks the model blending
+        content from two unrelated documents in its answer.
+        """
+        options = ", ".join(candidate_sources)
+        direct_answer = f"{reason}: {options}. Which one did you mean?"
+        return {
+            "search_query": query_type.lower(),
+            "hits": [],
+            "raw_hits": [],
+            "sources": [],
+            "confidence_pct": 0,
+            "rewrite_ms": rewrite_ms,
+            "search_ms": search_ms,
+            "rerank_ms": 0,
+            "query_type": query_type,
+            "direct_answer": direct_answer,
+        }
+
+    def _detect_named_source(self, chat_id: str, text: str) -> str | None:
+        """Whether `text` names one of this chat's indexed filenames, by
+        word-overlap (e.g. "what does the wenext doc say" matching
+        "wenext_report.pdf") — used both to bias NORMAL_QUERY results toward
+        that file (_filter_hits) and to resolve which document an ambiguous
+        TOC/PAGE request meant when a chat holds more than one (see
+        _retrieve_toc/_retrieve_pages).
+        """
+        q_words = set(re.split(r"\W+", text.lower()))
+        for src in self.store.sources_for_chat(chat_id):
+            src_words = set(re.split(r"[-_.\s]+", src.lower()))
+            meaningful = {w for w in (src_words & q_words) if len(w) > 3}
+            if len(meaningful) >= 2:
+                return src
+        return None
+
     def _filter_hits(self, question, search_q, hits, chat_id, final_k):
         """Type/source-aware narrowing of the retrieved pool (from app.py)."""
         q_lower = (question + " " + search_q).lower()
@@ -745,13 +858,7 @@ class RagService:
 
         wanted_source = None
         if not wanted_kind:
-            q_words = set(re.split(r"\W+", q_lower))
-            for src in self.store.sources_for_chat(chat_id):
-                src_words = set(re.split(r"[-_.\s]+", src.lower()))
-                meaningful = {w for w in (src_words & q_words) if len(w) > 3}
-                if len(meaningful) >= 2:
-                    wanted_source = src
-                    break
+            wanted_source = self._detect_named_source(chat_id, q_lower)
 
         if wanted_kind:
             filtered = [(d, s) for d, s in hits if d.kind == wanted_kind]
@@ -849,10 +956,15 @@ class RagService:
     # run automatically at answer time (human-in-the-loop, since a DeepEval
     # pass costs one judge call per metric and can take 10s of seconds).
     # --------------------------------------------------------------------- #
-    def evaluate_answer(self, question: str, answer: str, contexts: list[str]) -> dict | None:
+    def evaluate_answer(
+        self, question: str, answer: str, contexts: list[str],
+        dataset_names: list[str] | None = None,
+    ) -> dict | None:
         """Score a produced answer on the three reference-free DeepEval metrics,
         plus context_precision/context_recall/answer_correctness when `question`
-        closely matches one of the curated golden_set questions (see rag.golden_set).
+        closely matches one of the curated questions in one of `dataset_names`
+        (LangSmith datasets the user picked in the "Calculate Metrics" dropdown
+        — see rag.golden_set). No datasets selected -> reference-free only.
 
         `contexts` should be the same parent-chunk text the answer was actually
         generated from (see generator.context_texts) — persisted on the message
@@ -866,20 +978,30 @@ class RagService:
         if "don't know" in answer.lower():
             return None
         try:
-            ground_truth = golden_set.lookup(question)
+            ground_truth = golden_set.lookup(question, dataset_names)
             if ground_truth:
                 return evaluation.evaluate_with_ground_truth(question, answer, ground_truth, contexts)
             return evaluation.evaluate(question, answer, contexts)
         except Exception:
             return None
 
-    def evaluate_message(self, chat_id: str, message_id: str) -> dict | None:
+    def list_golden_datasets(self) -> list[str]:
+        """Every LangSmith dataset available for the "Calculate Metrics"
+        picker — see rag.golden_set.list_available_datasets."""
+        return golden_set.list_available_datasets()
+
+    def evaluate_message(
+        self, chat_id: str, message_id: str, dataset_names: list[str] | None = None,
+    ) -> dict | None:
         """Compute DeepEval metrics for one already-answered message, on demand.
 
-        Looks up the persisted question/answer/contexts from chat_store (saved
-        by append_assistant_message at generation time), scores them, merges
-        the result into that message's existing (timing-only) metrics dict,
-        and propagates it to Postgres + LangSmith feedback — same destinations
+        `dataset_names` — the LangSmith dataset(s) the user selected in the
+        UI for this specific evaluation (may be empty/None — reference-free
+        metrics only in that case). Looks up the persisted
+        question/answer/contexts from chat_store (saved by
+        append_assistant_message at generation time), scores them, merges the
+        result into that message's existing (timing-only) metrics dict, and
+        propagates it to Postgres + LangSmith feedback — same destinations
         the old automatic scoring used to reach, just deferred until now.
         """
         chat = self.get_chat(chat_id)
@@ -889,7 +1011,8 @@ class RagService:
             raise MessageNotFoundError(message_id)
 
         ragas = self.evaluate_answer(
-            message.get("question", ""), message.get("content", ""), message.get("contexts") or []
+            message.get("question", ""), message.get("content", ""), message.get("contexts") or [],
+            dataset_names,
         )
 
         metrics = dict(message.get("metrics") or {})

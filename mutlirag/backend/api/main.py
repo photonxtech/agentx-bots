@@ -46,6 +46,7 @@ from api.service import (
     MessageNotFoundError,
     NoDocumentError,
     RagService,
+    TooManyDocumentsError,
     smalltalk_reply,
 )
 
@@ -169,6 +170,8 @@ def upload_file(chat_id: str, file: UploadFile = File(...)):
 
     try:
         result = svc().ingest_file(chat_id, file_bytes, file.filename or "upload")
+    except TooManyDocumentsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Could not read file: {e}")
 
@@ -211,10 +214,12 @@ def upload_file_stream(chat_id: str, file: UploadFile = File(...)):
 
 
 @app.delete("/chats/{chat_id}/file", status_code=204, tags=["files"])
-def remove_file(chat_id: str):
-    """Remove this chat's indexed file so a different one can be uploaded."""
+def remove_file(chat_id: str, filename: str | None = None):
+    """Remove one of this chat's indexed files (a chat may hold more than
+    one — see config.MAX_DOCUMENTS_PER_CHAT). `filename` selects which one;
+    omit it only when the chat holds a single file."""
     try:
-        svc().remove_file(chat_id)
+        svc().remove_file(chat_id, filename)
     except ChatNotFoundError:
         raise HTTPException(status_code=404, detail=f"Chat {chat_id} not found.")
     except NoDocumentError:
@@ -525,20 +530,34 @@ def ask_stream(chat_id: str, body: schemas.AskRequest):
 # at answer time. Scores against the same parent-chunk context the answer was
 # actually generated from (persisted on the message, see RagService.
 # append_assistant_message), and back-fills Postgres + LangSmith feedback.
+#
+# `dataset_names` (request body) — the LangSmith dataset(s) the user picked in
+# the UI's dataset dropdown for THIS evaluation, populated from
+# GET /langsmith/datasets below. Empty/omitted -> the three reference-free
+# metrics only; no automatic global golden-set fallback (see rag.golden_set).
 # --------------------------------------------------------------------------- #
 @app.post(
     "/chats/{chat_id}/messages/{message_id}/metrics",
     response_model=schemas.Metrics,
     tags=["ask"],
 )
-def calculate_metrics(chat_id: str, message_id: str):
+def calculate_metrics(chat_id: str, message_id: str, body: schemas.CalculateMetricsRequest | None = None):
+    dataset_names = body.dataset_names if body else []
     try:
-        metrics = svc().evaluate_message(chat_id, message_id)
+        metrics = svc().evaluate_message(chat_id, message_id, dataset_names)
     except ChatNotFoundError:
         raise HTTPException(status_code=404, detail=f"Chat {chat_id} not found.")
     except MessageNotFoundError:
         raise HTTPException(status_code=404, detail=f"Message {message_id} not found in this chat.")
     return metrics
+
+
+@app.get("/langsmith/datasets", response_model=schemas.GoldenDatasetList, tags=["ask"])
+def langsmith_datasets():
+    """Every LangSmith dataset available for the "Calculate Metrics" dataset
+    picker (see rag.golden_set.list_available_datasets). Empty list, not an
+    error, if LangSmith isn't configured or is unreachable."""
+    return {"datasets": svc().list_golden_datasets()}
 
 
 # --------------------------------------------------------------------------- #

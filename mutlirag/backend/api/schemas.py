@@ -37,7 +37,14 @@ class ChatSummary(BaseModel):
     updated_at: str
     message_count: int
     file: str | None = Field(
-        default=None, description="The single indexed filename for this chat, if any."
+        default=None,
+        description="The first indexed filename for this chat, if any (backward-compatible "
+                    "single-file view — see `files` for the full list).",
+    )
+    files: list[str] = Field(
+        default_factory=list,
+        description="All indexed filenames for this chat (a chat may hold up to "
+                    "config.MAX_DOCUMENTS_PER_CHAT distinct documents).",
     )
     chunk_count: int = Field(
         default=0, description="How many chunks are indexed for this chat."
@@ -97,6 +104,21 @@ class Metrics(BaseModel):
     # any metric that returned None because its judge call failed rather than
     # because it wasn't attempted.
     errors: dict[str, str] | None = None
+
+
+class CalculateMetricsRequest(BaseModel):
+    """Body for POST .../metrics — which LangSmith dataset(s), if any, to
+    check this answer's ground truth against (see rag.golden_set). Omit or
+    leave empty for the three reference-free metrics only."""
+    dataset_names: list[str] = Field(default_factory=list)
+
+
+class GoldenDatasetList(BaseModel):
+    datasets: list[str] = Field(
+        description="Every LangSmith dataset available to pick from in the "
+                    "\"Calculate Metrics\" dropdown. Empty if LangSmith isn't "
+                    "configured or is unreachable."
+    )
 
 
 class AskResponse(BaseModel):

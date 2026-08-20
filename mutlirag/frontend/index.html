@@ -163,7 +163,7 @@
 // call below goes to http://localhost:8010 and shows up in your Network tab.
 const API = ""; // same origin — relative paths hit the backend directly
 
-let state = { chats: [], currentId: null, detail: null, busy: false };
+let state = { chats: [], currentId: null, detail: null, busy: false, goldenDatasets: [] };
 
 const $ = (id) => document.getElementById(id);
 function toast(msg) {
@@ -190,6 +190,19 @@ async function loadHealth() {
       `🔌 <b>connected</b> · ${location.origin}`;
   } catch (e) {
     $("backend").innerHTML = `<span style="color:var(--err)">⚠️ backend unreachable</span>`;
+  }
+}
+
+// Fetched once at startup — which LangSmith datasets are available to check
+// a "Calculate Metrics" answer's ground truth against (see rag.golden_set).
+// Empty (not an error) when LangSmith isn't configured — the dataset picker
+// just doesn't appear in that case, plain "Calculate Metrics" still works.
+async function loadGoldenDatasets() {
+  try {
+    const r = await (await api("/langsmith/datasets")).json();
+    state.goldenDatasets = r.datasets || [];
+  } catch (e) {
+    state.goldenDatasets = [];
   }
 }
 
@@ -279,19 +292,34 @@ function renderMain() {
   }
   $("chatTitle").textContent = d.title;
 
-  // File bar + upload area
-  if (d.file) {
-    $("fileBar").innerHTML =
-      `📄 <code>${escapeHtml(d.file)}</code> · ${d.chunk_count} chunks
-       <a id="removeFile">remove</a>`;
-    $("removeFile").onclick = removeFile;
-    // A file is already indexed — hide the upload box entirely (no empty bar).
-    $("uploadArea").innerHTML = ""; $("uploadArea").style.display = "none";
+  // File bar (one line per document — a chat may hold several) + upload area
+  const files = d.files && d.files.length ? d.files : (d.file ? [d.file] : []);
+  if (files.length) {
+    $("fileBar").innerHTML = files.map(f =>
+      `<div>📄 <code>${escapeHtml(f)}</code>
+        <a class="removeFileLink" data-file="${escapeHtml(f)}">remove</a></div>`
+    ).join("");
+    for (const a of $("fileBar").querySelectorAll(".removeFileLink")) {
+      a.onclick = () => removeFile(a.dataset.file);
+    }
   } else {
     $("fileBar").innerHTML = "No file yet — upload one below.";
+  }
+  // The upload box stays available while under the per-chat document cap —
+  // a chat can hold more than one document now — but once AT the cap it's
+  // replaced with a plain notice instead of letting the user attempt an
+  // upload that the backend will only reject afterward. MAX_DOCUMENTS must
+  // match config.MAX_DOCUMENTS_PER_CHAT (no endpoint exposes it to the
+  // frontend, so this is a mirrored constant, not a fetched one).
+  const MAX_DOCUMENTS = 3;
+  if (files.length >= MAX_DOCUMENTS) {
     $("uploadArea").style.display = "block";
     $("uploadArea").innerHTML =
-      `📎 Upload ONE file (PDF, Word, PowerPoint, text, image):
+      `Document limit reached (${files.length}/${MAX_DOCUMENTS}) — remove one above to upload another.`;
+  } else {
+    $("uploadArea").style.display = "block";
+    $("uploadArea").innerHTML =
+      `📎 Upload a file (PDF, Word, PowerPoint, text, image)${files.length ? ` — added alongside your existing document(s) (${files.length}/${MAX_DOCUMENTS})` : ""}:
        <input type="file" id="fileInput"
         accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.bmp,.tiff,.webp" />`;
     $("fileInput").onchange = uploadFile;
@@ -303,8 +331,10 @@ function renderMessages() {
   const box = $("messages"); box.innerHTML = "";
   const msgs = state.detail?.messages || [];
   if (!msgs.length) {
-    box.innerHTML = `<div class="empty">${state.detail.file
-      ? "Ask a question about <b>" + escapeHtml(state.detail.file) + "</b>."
+    const files = state.detail.files && state.detail.files.length
+      ? state.detail.files : (state.detail.file ? [state.detail.file] : []);
+    box.innerHTML = `<div class="empty">${files.length
+      ? "Ask a question about <b>" + files.map(escapeHtml).join("</b>, <b>") + "</b>."
       : "Upload a file, then ask a question."}</div>`;
     return;
   }
@@ -339,23 +369,56 @@ function renderRagas(mt) {
 // A "Calculate Metrics" button — DeepEval no longer runs automatically after
 // an answer; clicking this is what triggers it (human-in-the-loop, since a
 // judge pass costs several LLM calls and can take many seconds).
+//
+// When LangSmith datasets are available (state.goldenDatasets), a small
+// multi-select picker sits next to the button — the user picks which
+// dataset(s) are relevant to THIS question before scoring, so
+// context_precision/context_recall/answer_correctness are checked against
+// the right ground truth instead of one fixed global dataset guessing wrong
+// once a chat can hold more than one document (see rag.golden_set). No
+// selection -> the three reference-free metrics only, same as before.
 function renderCalcButton(messageId) {
+  const wrap = document.createElement("span");
+
+  if (state.goldenDatasets.length) {
+    const picker = document.createElement("details");
+    picker.style.display = "inline-block";
+    picker.style.marginRight = "6px";
+    picker.innerHTML = `<summary style="cursor:pointer; font-size:12px; color:var(--muted);">🎯 Golden dataset(s)</summary>`;
+    const list = document.createElement("div");
+    list.style.cssText = "padding:6px 4px; font-size:12px;";
+    for (const name of state.goldenDatasets) {
+      const id = `ds-${messageId}-${name}`;
+      list.innerHTML += `<label style="display:block; padding:2px 0; cursor:pointer;">
+        <input type="checkbox" class="golden-ds-check" value="${escapeHtml(name)}" id="${id}" /> ${escapeHtml(name)}
+      </label>`;
+    }
+    picker.appendChild(list);
+    wrap.appendChild(picker);
+  }
+
   const btn = document.createElement("button");
   btn.className = "calc-metrics";
   btn.textContent = "📊 Calculate Metrics";
-  btn.onclick = () => calculateMetrics(messageId, btn);
-  return btn;
+  btn.onclick = () => calculateMetrics(messageId, btn, wrap);
+  wrap.appendChild(btn);
+  return wrap;
 }
 
-async function calculateMetrics(messageId, btn) {
+async function calculateMetrics(messageId, btn, wrap) {
+  const datasetNames = [...wrap.querySelectorAll(".golden-ds-check:checked")].map(el => el.value);
   btn.disabled = true;
   btn.textContent = "Calculating…";
   try {
-    const resp = await api(`/chats/${state.currentId}/messages/${messageId}/metrics`, { method: "POST" });
+    const resp = await api(`/chats/${state.currentId}/messages/${messageId}/metrics`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset_names: datasetNames }),
+    });
     const metrics = await resp.json();
     const rag = renderRagas(metrics);
     if (rag) {
-      btn.replaceWith(rag);
+      wrap.replaceWith(rag);
     } else {
       btn.disabled = false;
       btn.textContent = "📊 Calculate Metrics";
@@ -480,8 +543,9 @@ async function uploadFile(ev) {
   }
 }
 
-async function removeFile() {
-  await api(`/chats/${state.currentId}/file`, { method: "DELETE" });
+async function removeFile(filename) {
+  const qs = filename ? `?filename=${encodeURIComponent(filename)}` : "";
+  await api(`/chats/${state.currentId}/file${qs}`, { method: "DELETE" });
   await selectChat(state.currentId);
   await loadChats();
 }
@@ -594,6 +658,7 @@ $("q").addEventListener("keydown", (e) => {
 // Boot
 (async function init() {
   await loadHealth();
+  await loadGoldenDatasets();
   await loadChats();
   if (state.chats.length) selectChat(state.chats[0].id);
   else { await newChat(); }

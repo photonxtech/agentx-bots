@@ -76,6 +76,12 @@ class GroqJudge(DeepEvalBaseLLM):
             temperature=0.0,
             max_tokens=current_max_tokens,
             timeout=config.DEEPEVAL_TIMEOUT_S,
+            # DEEPEVAL_JUDGE_MODEL is a reasoning model (gpt-oss) — without
+            # this it can spend the whole token budget on hidden reasoning
+            # and return an empty response (confirmed live), which would
+            # otherwise look like a truncated-JSON failure here. See
+            # config.REASONING_EFFORT.
+            reasoning_effort=config.REASONING_EFFORT,
             messages=[{"role": "user", "content": prompt}],
         )
         if schema is not None:

@@ -74,8 +74,8 @@ def _service(documents) -> RagService:
     return svc
 
 
-def _doc(text, page, is_index=False, chat_id="chat1"):
-    return Document(text=text, source="doc.pdf", kind="pdf",
+def _doc(text, page, is_index=False, chat_id="chat1", source="doc.pdf"):
+    return Document(text=text, source=source, kind="pdf",
                      meta={"page": page, "is_index": is_index, "chat_id": chat_id})
 
 
@@ -197,6 +197,72 @@ def test_clarify_followup_reuses_previous_answer_context_without_a_new_search(mo
     assert r["hits"][0][0].text == "Red is one of the four 4D-i colors, associated with fast decision-making."
     assert r["sources"] == [{"source": "osw_data.pdf", "page": 12}]
     assert "think as i am kid" in r["search_query"]
+
+
+def test_toc_query_ambiguous_across_multiple_documents_asks_which_one():
+    """Two documents in one chat both have a TOC, and the question doesn't
+    name either — must ask which document instead of merging or guessing."""
+    svc = _service([
+        _doc("toc page 1", page=1, is_index=True, source="osw_data.pdf"),
+        _doc("toc page 1", page=1, is_index=True, source="wenext_report.pdf"),
+    ])
+    r = svc.retrieve("chat1", "Give me the table of contents.", [])
+    assert r["query_type"] == "TOC_QUERY"
+    assert r["hits"] == []
+    assert r["direct_answer"] is not None
+    assert "osw_data.pdf" in r["direct_answer"]
+    assert "wenext_report.pdf" in r["direct_answer"]
+
+
+def test_toc_query_named_document_resolves_ambiguity():
+    """Same two-document setup, but the question names one of them by
+    filename — resolved directly, no clarifying question needed."""
+    svc = _service([
+        _doc("osw toc entry", page=1, is_index=True, source="osw_data.pdf"),
+        _doc("wenext toc entry", page=1, is_index=True, source="wenext_report.pdf"),
+    ])
+    r = svc.retrieve("chat1", "Give me the table of contents of the wenext report.", [])
+    assert r["query_type"] == "TOC_QUERY"
+    assert r["direct_answer"] is None
+    assert [d.source for d, _ in r["hits"]] == ["wenext_report.pdf"]
+
+
+def test_page_query_ambiguous_across_multiple_documents_asks_which_one():
+    """Both documents have a page 5 — must ask which document, not merge."""
+    svc = _service([
+        _doc("osw page 5 content", page=5, is_index=False, source="osw_data.pdf"),
+        _doc("wenext page 5 content", page=5, is_index=False, source="wenext_report.pdf"),
+    ])
+    r = svc.retrieve("chat1", "What does page 5 say?", [])
+    assert r["query_type"] == "PAGE_QUERY"
+    assert r["hits"] == []
+    assert r["direct_answer"] is not None
+    assert "osw_data.pdf" in r["direct_answer"]
+    assert "wenext_report.pdf" in r["direct_answer"]
+
+
+def test_page_query_named_document_resolves_ambiguity():
+    svc = _service([
+        _doc("osw page 5 content", page=5, is_index=False, source="osw_data.pdf"),
+        _doc("wenext page 5 content", page=5, is_index=False, source="wenext_report.pdf"),
+    ])
+    r = svc.retrieve("chat1", "What does page 5 of the wenext report say?", [])
+    assert r["query_type"] == "PAGE_QUERY"
+    assert r["direct_answer"] is None
+    assert [d.source for d, _ in r["hits"]] == ["wenext_report.pdf"]
+
+
+def test_page_query_single_matching_document_is_never_ambiguous():
+    """Page 5 only exists in ONE of the two documents — no ambiguity, no
+    clarifying question, even though the chat has multiple files."""
+    svc = _service([
+        _doc("osw page 5 content", page=5, is_index=False, source="osw_data.pdf"),
+        _doc("wenext page 9 content", page=9, is_index=False, source="wenext_report.pdf"),
+    ])
+    r = svc.retrieve("chat1", "What does page 5 say?", [])
+    assert r["query_type"] == "PAGE_QUERY"
+    assert r["direct_answer"] is None
+    assert [d.source for d, _ in r["hits"]] == ["osw_data.pdf"]
 
 
 def test_clarify_followup_with_no_previous_answer_falls_back_to_normal_search(monkeypatch):

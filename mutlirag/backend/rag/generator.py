@@ -126,6 +126,10 @@ def _query_understanding(question: str, history: list[dict]) -> dict:
         model=config.REWRITE_MODEL,
         temperature=0.0,
         max_tokens=200,
+        # REWRITE_MODEL is a reasoning model (gpt-oss) — without this it can
+        # spend the whole token budget on hidden reasoning and return an
+        # empty response (confirmed live). See config.REASONING_EFFORT.
+        reasoning_effort=config.REASONING_EFFORT,
         response_format={"type": "json_object"},
         messages=[
             {
@@ -326,6 +330,10 @@ def answer(
         temperature=temperature,
         max_tokens=config.MAX_TOKENS,
         stream=True,
+        # DEFAULT_MODEL is a reasoning model (gpt-oss) — without this it can
+        # spend the whole token budget on hidden reasoning and return an
+        # empty answer (confirmed live). See config.REASONING_EFFORT.
+        reasoning_effort=config.REASONING_EFFORT,
         # Not a typed kwarg on this SDK version (groq==1.6.0) — confirmed
         # live it TypeErrors as an unexpected keyword if passed directly,
         # breaking every answer. The underlying Groq API does honor it

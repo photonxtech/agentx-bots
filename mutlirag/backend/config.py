@@ -204,6 +204,19 @@ NEIGHBOR_EXPANSION_MAX_ADDED = 4
 # diversity slot, since being similar to their anchor is expected and fine.
 MMR_LAMBDA = 0.7
 
+# --- Multi-document chats ---
+# A chat used to hold exactly one file (a new upload replaced whatever was
+# there — see RagService._replace_matching_file). Now a chat can hold several
+# distinct documents at once (a new, differently-named upload is added
+# alongside existing ones; re-uploading the SAME filename still replaces just
+# that one, same as before). Capped rather than unbounded: each additional
+# document grows the candidate pool every NORMAL_QUERY search has to rank
+# (see retrieve()'s num_sources-scaled final_k), and makes an unqualified
+# "give me the TOC" / "what's on page 5" genuinely ambiguous across more
+# documents (see RagService._retrieve_toc/_retrieve_pages, which ask the user
+# to specify which document rather than guessing or silently merging).
+MAX_DOCUMENTS_PER_CHAT = 3
+
 # --- Vector DB backend ---
 # "weaviate" -> self-hosted Weaviate (see docker-compose.yml); "chroma" -> the
 # original embedded ChromaDB. If Weaviate is selected but unreachable at
@@ -232,7 +245,13 @@ CACHE_DIR = os.path.join(INDEX_DIR, "cache")
 # --- Chat memory ---
 # Follow-up questions are rewritten into standalone search queries using the
 # recent chat history, with a small fast model.
-REWRITE_MODEL = "llama-3.1-8b-instant"
+# llama-3.1-8b-instant was decommissioned by Groq (confirmed live: 404
+# model_not_found) — replaced with gpt-oss-20b, the current small/fast
+# option. It's a reasoning model: see REASONING_EFFORT below, required on
+# every call or it can silently return an EMPTY response (confirmed live —
+# the model spent its entire token budget on hidden reasoning and produced
+# no visible content at all).
+REWRITE_MODEL = "openai/gpt-oss-20b"
 REWRITE_HISTORY_TURNS = 6   # how many recent messages to give the rewriter
 
 # --- Query understanding / rewrite validation ---
@@ -255,17 +274,31 @@ REWRITE_MIN_SIMILARITY = 0.30
 # --- Groq generation defaults ---
 # Curated fallback list, used only if the live /models call fails.
 # The app fetches the real, current list from Groq at runtime.
+# Previous list (llama-3.3-70b-versatile, llama-3.1-8b-instant, the llama-4
+# scout/maverick pair, deepseek-r1-distill-llama-70b, gemma2-9b-it) is
+# entirely decommissioned — confirmed live against Groq's actual /models
+# response, not one of them is still offered. Replaced with what's actually
+# live today (audio/TTS-only models like canopylabs/orpheus-* excluded,
+# same filtering rule list_models() applies to the live response).
 FALLBACK_GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "deepseek-r1-distill-llama-70b",
-    "gemma2-9b-it",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "groq/compound",
+    "groq/compound-mini",
+    "qwen/qwen3.6-27b",
 ]
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_TEMPERATURE = 0.2   # low => grounded, factual answers for RAG
 MAX_TOKENS = 1024
+# gpt-oss (DEFAULT_MODEL/REWRITE_MODEL/DEEPEVAL_JUDGE_MODEL) are reasoning
+# models — confirmed live, a plain call with no reasoning_effort set can
+# burn its ENTIRE max_tokens budget on hidden chain-of-thought and return
+# EMPTY visible content. "low" keeps that overhead small while still
+# avoiding the empty-response failure mode; "none" is not a valid value for
+# this model family (unlike VISION_MODEL's qwen3.6, which does accept
+# "none" — see rag/vision.py). Revisit this if DEFAULT_MODEL/REWRITE_MODEL/
+# DEEPEVAL_JUDGE_MODEL are ever changed to a non-reasoning model.
+REASONING_EFFORT = "low"
 
 # --- Vision (image understanding via Groq) ---
 # Every ingested image (standalone, embedded in PDF/DOCX, or a rendered
@@ -305,9 +338,11 @@ VISION_MAX_RETRY_WAIT = 25.0  # s; if the API says wait longer (per-day limit), 
 # Each metric is an extra Groq call, so this adds latency. Set
 # DEEPEVAL_ENABLED = False to turn evaluation off entirely (no extra API calls).
 DEEPEVAL_ENABLED = True
-# Separate TPD bucket from DEFAULT_MODEL (llama-3.3-70b-versatile), so judge
-# calls no longer compete with generation for the same daily token quota.
-DEEPEVAL_JUDGE_MODEL = "llama-3.1-8b-instant"
+# Separate TPD bucket from DEFAULT_MODEL, so judge calls no longer compete
+# with generation for the same daily token quota. llama-3.1-8b-instant was
+# decommissioned by Groq — replaced with gpt-oss-20b (see REASONING_EFFORT
+# above, required for this model family).
+DEEPEVAL_JUDGE_MODEL = "openai/gpt-oss-20b"
 DEEPEVAL_TIMEOUT_S = 15.0  # per-call timeout on the judge model; a hang must not stall a request
 DEEPEVAL_METRIC_THRESHOLD = 0.7  # pass/fail cutoff DeepEval uses for metric.success
 # Rate-limit handling: metrics run several-at-once (see evaluate()) and each
@@ -340,15 +375,15 @@ DEEPEVAL_MAX_CHUNK_CHARS = 500    # each chunk truncated to this many chars firs
 
 # --- Golden-set lookup (live chat) ---
 # context_precision/context_recall/answer_correctness need a ground-truth
-# answer, which a real user's question never has. If a live question closely
-# matches one of the curated questions in GOLDEN_SET_PATH (cosine similarity
-# via the same local embedding model), RagService.evaluate_answer() reuses
-# that row's ground_truth to score those metrics too. Anything below the
-# threshold still gets only the three reference-free metrics.
-GOLDEN_SET_PATH = os.path.join(BASE_DIR, "backend", "scripts", "eval_dataset_osw.json")
-# Was 0.92 (near-paraphrase only) — loosened so more live traffic actually
-# lands a match, since context_precision/context_recall/answer_correctness
-# are otherwise averaged over a tiny, coincidental sliver of questions.
+# answer, which a real user's question never has. Rather than one fixed
+# global dataset (the old design — wrong for a multi-document chat, since
+# it can't know which document's golden set actually applies to a given
+# question), the user explicitly picks one or more LangSmith datasets to
+# check against from a dropdown next to "Calculate Metrics" (see
+# rag.golden_set.list_available_datasets/lookup, RagService.evaluate_answer).
+# No selection -> only the three reference-free metrics; a selection with no
+# close-enough match within it -> same. This also means a compound question
+# spanning two documents can be checked against both datasets at once.
 GOLDEN_SET_MATCH_THRESHOLD = 0.85
 
 # --- Postgres (Q&A + RAGAS metrics logging) ---

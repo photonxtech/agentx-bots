@@ -1,22 +1,29 @@
-"""Unit tests for RagService's auto-replace-on-upload behavior
-(RagService._replace_existing_file, wired into ingest_file/ingest_file_stream).
+"""Unit tests for RagService's upload behavior:
+  * RagService._replace_matching_file — re-uploading a file with the SAME
+    name replaces its old chunks, wired into ingest_file/ingest_file_stream.
+  * RagService._check_document_cap — a chat can hold several distinct
+    documents (config.MAX_DOCUMENTS_PER_CHAT) at once; a genuinely new
+    filename is added ALONGSIDE existing ones, up to that cap, past which
+    TooManyDocumentsError is raised before any parsing/OCR cost is spent.
 
-A chat holds exactly one file at a time (see chat_file/_annotate) — before
-this fix, uploading a new file only ever ADDED chunks, so a re-upload (same
-file, or a revised version of it) left the old chunks in the index forever:
-the same content ended up indexed multiple times, and duplicate chunks
-competed for retrieval's top_k slots. This is a real production bug (see
-also test_vectorstore.py's dedup tests, the retrieval-time safety net for
-whatever duplicates already exist).
+Before the same-filename fix, uploading a new file only ever ADDED chunks, so
+a re-upload (same file, or a revised version of it) left the old chunks in
+the index forever: the same content ended up indexed multiple times, and
+duplicate chunks competed for retrieval's top_k slots. This is a real
+production bug (see also test_vectorstore.py's dedup tests, the
+retrieval-time safety net for whatever duplicates already exist).
 
 Real ingestion (PDF/OCR parsing) is mocked out — these tests check the
-replace-before-add WIRING, not file parsing.
+replace/add/cap WIRING, not file parsing.
 """
 
 import threading
 
+import pytest
+
+import config
 import rag.ingestion as ingestion
-from api.service import RagService
+from api.service import RagService, TooManyDocumentsError
 from rag.ingestion import Document
 
 
@@ -94,16 +101,58 @@ def test_second_upload_replaces_the_first(monkeypatch):
     assert store.size_for_chat("chat1") == 1  # not 2 — old chunks are gone
 
 
-def test_uploading_a_different_filename_still_replaces(monkeypatch):
-    """A chat holds ONE file — uploading revised_doc.pdf into a chat that
-    already has doc.txt must remove doc.txt, not keep both."""
+def test_uploading_a_different_filename_adds_alongside(monkeypatch):
+    """A chat can hold several distinct documents at once (up to
+    config.MAX_DOCUMENTS_PER_CHAT) — uploading other_doc.pdf into a chat that
+    already has doc.txt must ADD it, not remove doc.txt."""
     monkeypatch.setattr(ingestion, "ingest_cached", _fake_ingest_cached)
     svc, store = _service()
     svc.ingest_file("chat1", b"bytes", "doc.txt")
-    result = svc.ingest_file("chat1", b"other bytes", "revised_doc.pdf")
+    result = svc.ingest_file("chat1", b"other bytes", "other_doc.pdf")
 
-    assert result["message"].startswith("Replaced 'doc.txt'")
-    assert store.sources_for_chat("chat1") == ["revised_doc.pdf"]
+    assert "Replaced" not in result["message"]
+    assert [c for c in store.calls if c[0] == "remove"] == []
+    assert sorted(store.sources_for_chat("chat1")) == ["doc.txt", "other_doc.pdf"]
+
+
+def test_document_cap_blocks_a_new_filename_past_the_limit(monkeypatch):
+    """Past config.MAX_DOCUMENTS_PER_CHAT distinct documents, a new filename
+    is rejected with TooManyDocumentsError — raised before ingest_cached()
+    (OCR/vision) is ever called, since ingestion cost shouldn't be spent on
+    an upload that's going to be rejected anyway."""
+    monkeypatch.setattr(config, "MAX_DOCUMENTS_PER_CHAT", 2)
+    calls = []
+
+    def _tracked_ingest(file_bytes, filename, progress_callback=None):
+        calls.append(filename)
+        return _fake_ingest_cached(file_bytes, filename, progress_callback)
+
+    monkeypatch.setattr(ingestion, "ingest_cached", _tracked_ingest)
+    svc, store = _service()
+    svc.ingest_file("chat1", b"bytes", "doc1.txt")
+    svc.ingest_file("chat1", b"bytes", "doc2.txt")
+
+    with pytest.raises(TooManyDocumentsError):
+        svc.ingest_file("chat1", b"bytes", "doc3.txt")
+
+    assert calls == ["doc1.txt", "doc2.txt"]  # doc3.txt never got parsed
+    assert sorted(store.sources_for_chat("chat1")) == ["doc1.txt", "doc2.txt"]
+
+
+def test_document_cap_does_not_block_replacing_a_same_named_file(monkeypatch):
+    """At the cap, re-uploading a file that's ALREADY one of the existing
+    documents must still work (it replaces, not adds) — the cap only blocks
+    genuinely new filenames."""
+    monkeypatch.setattr(config, "MAX_DOCUMENTS_PER_CHAT", 2)
+    monkeypatch.setattr(ingestion, "ingest_cached", _fake_ingest_cached)
+    svc, store = _service()
+    svc.ingest_file("chat1", b"bytes", "doc1.txt")
+    svc.ingest_file("chat1", b"bytes", "doc2.txt")
+
+    result = svc.ingest_file("chat1", b"revised bytes", "doc1.txt")
+
+    assert "Replaced 'doc1.txt'" in result["message"]
+    assert sorted(store.sources_for_chat("chat1")) == ["doc1.txt", "doc2.txt"]
 
 
 def test_failed_second_upload_does_not_delete_the_existing_file(monkeypatch):

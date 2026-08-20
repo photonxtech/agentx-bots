@@ -1,29 +1,30 @@
-"""Golden-set lookup — matches a live question against curated Q&A pairs.
+"""Golden-set lookup — matches a live question against curated Q&A pairs
+from LangSmith dataset(s) the USER explicitly selects, per question.
 
 context_recall and answer_correctness (see rag.evaluation) need a ground-truth
-reference answer, which a real user's question never has. This module lets
-RagService.evaluate_answer() score those two metrics anyway, but ONLY when the
-live question is a close semantic match to one of the hand-curated questions
-in the golden set — in which case that row's ground_truth is reused. Any
-other live question still falls back to the four reference-free metrics.
+reference answer, which a real user's question never has. Earlier design used
+one fixed global dataset for the whole app — wrong once a chat can hold
+multiple documents, since the system has no reliable way to know which
+document's golden set applies to a given question (a compound question can
+span two documents; the retrieved evidence doesn't map cleanly to just one).
 
-Source of truth: the LangSmith dataset named LANGSMITH_DATASET_NAME (default
-"jsonl") when LANGSMITH_TRACING/LANGSMITH_API_KEY are configured — this is
-edited directly in the LangSmith UI, no redeploy needed to change the Q&A
-pairs, only a server restart to pick up edits (see caching note below). Falls
-back to the local scripts/eval_dataset_osw.json file if LangSmith isn't
-configured, or if fetching from it fails for any reason (network, auth, the
-dataset not existing) — a LangSmith outage must never break live chat.
+Instead, the "Calculate Metrics" UI shows a dropdown of every dataset
+available in LangSmith (list_available_datasets(), multi-select) and the user
+picks whichever one(s) are relevant to THAT question before scoring — sidesteps
+the attribution problem entirely, and naturally supports checking a compound
+answer against more than one dataset at once. No selection, or no close-enough
+match within the selected set(s), and the answer still gets scored on the
+three reference-free metrics only (see RagService.evaluate_answer).
 
-Fetched ONCE per process and cached in memory (like the old local-file-only
-version was) — this does NOT re-check LangSmith on every question, both for
-latency and to avoid hammering the API. Restart the server to pick up edits
-made in the LangSmith UI.
+Each named dataset is fetched from LangSmith once and cached in memory for the
+process lifetime (avoids hammering the API on every question). There's no
+local-file fallback — a dataset has to actually exist in LangSmith to be
+selectable at all, since the dropdown is populated straight from
+client.list_datasets().
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
@@ -34,82 +35,87 @@ from rag import embeddings
 
 logger = logging.getLogger(__name__)
 
-_questions: list[str] | None = None
-_ground_truths: list[str] | None = None
-_vecs: np.ndarray | None = None
+# Cache keyed by dataset name -> (questions, ground_truths, embedding matrix).
+_dataset_cache: dict[str, tuple[list[str], list[str], np.ndarray]] = {}
 
 
-def _load_from_langsmith() -> tuple[list[str], list[str]] | None:
-    """Fetch golden-set Q&A pairs from LangSmith, or None if unavailable.
+def _langsmith_configured() -> bool:
+    return os.getenv("LANGSMITH_TRACING", "").lower() == "true" and bool(os.getenv("LANGSMITH_API_KEY"))
 
-    Never raises — any failure (LangSmith not configured, unreachable, the
-    dataset missing) just tells the caller to fall back to the local file.
+
+def list_available_datasets() -> list[str]:
+    """Names of every LangSmith dataset available to pick from, or [] if
+    LangSmith isn't configured or unreachable. Powers the "Calculate Metrics"
+    dataset picker — never raises, a LangSmith outage just means an empty
+    dropdown, not a broken UI.
     """
-    if os.getenv("LANGSMITH_TRACING", "").lower() != "true" or not os.getenv("LANGSMITH_API_KEY"):
-        return None
+    if not _langsmith_configured():
+        return []
     try:
         from langsmith import Client
 
-        dataset_name = os.getenv("LANGSMITH_DATASET_NAME", "jsonl")
         client = Client()
-        if not client.has_dataset(dataset_name=dataset_name):
-            return None
-        dataset = client.read_dataset(dataset_name=dataset_name)
-        examples = [
-            ex for ex in client.list_examples(dataset_id=dataset.id) if ex.inputs.get("question")
-        ]
-        if not examples:
-            return None
-        questions = [ex.inputs["question"] for ex in examples]
-        ground_truths = [ex.outputs.get("ground_truth", "") for ex in examples]
-        logger.info(
-            "Golden set: loaded %d example(s) from LangSmith dataset '%s'", len(questions), dataset_name
-        )
-        return questions, ground_truths
+        return sorted(ds.name for ds in client.list_datasets())
     except Exception:
-        logger.warning(
-            "Golden set: failed to load from LangSmith, falling back to local file", exc_info=True
-        )
-        return None
+        logger.warning("Failed to list LangSmith datasets", exc_info=True)
+        return []
 
 
-def _load() -> None:
-    global _questions, _ground_truths, _vecs
-    if _vecs is not None:
-        return
-
-    from_langsmith = _load_from_langsmith()
-    if from_langsmith is not None:
-        _questions, _ground_truths = from_langsmith
-        _vecs = embeddings.embed(_questions)
-        return
-
-    if not os.path.exists(config.GOLDEN_SET_PATH):
-        _questions, _ground_truths = [], []
-        _vecs = np.zeros((0, embeddings.embedding_dim()), dtype="float32")
-        return
-    with open(config.GOLDEN_SET_PATH, "r", encoding="utf-8") as f:
-        rows = json.load(f)
-    _questions = [r["question"] for r in rows]
-    _ground_truths = [r["ground_truth"] for r in rows]
-    _vecs = embeddings.embed(_questions) if _questions else np.zeros(
-        (0, embeddings.embedding_dim()), dtype="float32"
-    )
-
-
-def lookup(question: str) -> str | None:
-    """Return the ground_truth of the closest curated question, or None.
-
-    Only returns a match when cosine similarity clears
-    config.GOLDEN_SET_MATCH_THRESHOLD — a loose paraphrase of a curated
-    question still counts, but an unrelated question does not.
+def _load_dataset(name: str) -> tuple[list[str], list[str], np.ndarray]:
+    """Fetch one dataset's question/ground_truth pairs from LangSmith,
+    embed the questions once, and cache. Raises on failure — the caller
+    (lookup) treats a single bad dataset name as a skip, not a hard failure
+    for the whole call.
     """
-    _load()
-    if not _questions or not question or not question.strip():
+    if name in _dataset_cache:
+        return _dataset_cache[name]
+
+    from langsmith import Client
+
+    client = Client()
+    dataset = client.read_dataset(dataset_name=name)
+    examples = [ex for ex in client.list_examples(dataset_id=dataset.id) if ex.inputs.get("question")]
+    questions = [ex.inputs["question"] for ex in examples]
+    ground_truths = [ex.outputs.get("ground_truth", "") for ex in examples]
+    vecs = (
+        embeddings.embed(questions)
+        if questions
+        else np.zeros((0, embeddings.embedding_dim()), dtype="float32")
+    )
+    _dataset_cache[name] = (questions, ground_truths, vecs)
+    return _dataset_cache[name]
+
+
+def lookup(question: str, dataset_names: list[str] | None = None) -> str | None:
+    """Return the ground_truth of the closest curated question across all
+    `dataset_names`, or None if none were selected, none could be loaded, or
+    the best match anywhere in them is below config.GOLDEN_SET_MATCH_THRESHOLD.
+
+    Checking multiple datasets at once takes the single best match across all
+    of them — not one match per dataset — so a compound question is scored
+    against whichever curated question (from either dataset) it actually
+    resembles most.
+    """
+    if not dataset_names or not question or not question.strip():
         return None
+
     q_vec = embeddings.embed([question])[0]
-    sims = _vecs @ q_vec
-    best_idx = int(np.argmax(sims))
-    if sims[best_idx] >= config.GOLDEN_SET_MATCH_THRESHOLD:
-        return _ground_truths[best_idx]
+    best_score = -1.0
+    best_ground_truth = None
+    for name in dataset_names:
+        try:
+            questions, ground_truths, vecs = _load_dataset(name)
+        except Exception:
+            logger.warning("Failed to load golden dataset %r", name, exc_info=True)
+            continue
+        if not questions:
+            continue
+        sims = vecs @ q_vec
+        idx = int(np.argmax(sims))
+        if sims[idx] > best_score:
+            best_score = float(sims[idx])
+            best_ground_truth = ground_truths[idx]
+
+    if best_ground_truth is not None and best_score >= config.GOLDEN_SET_MATCH_THRESHOLD:
+        return best_ground_truth
     return None
