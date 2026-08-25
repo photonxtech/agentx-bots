@@ -92,7 +92,7 @@ def main():
 
     # Same judge model your app already uses for generation — keep this in
     # mind when comparing against peers who might've judged with GPT-4o etc.
-    judge_llm = LangchainLLMWrapper(ChatGroq(model="llama-3.1-8b-instant", temperature=0))    # Same embedding model your retriever already uses
+    judge_llm = LangchainLLMWrapper(ChatGroq(model="openai/gpt-oss-20b", temperature=0))    # Same embedding model your retriever already uses
     judge_embeddings = LangchainEmbeddingsWrapper(
         HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     )

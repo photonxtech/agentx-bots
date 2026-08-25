@@ -1,8 +1,53 @@
-# Secrets
+# =========================================================
+# SECRETS / ENVIRONMENT VARIABLES
+# =========================================================
 .env
-backend/.env
+.env.*
+!.env.example
 
-# Runtime data (regenerated, not source)
+backend/.env
+backend/.env.*
+!.env.example
+
+
+# =========================================================
+# PYTHON
+# =========================================================
+__pycache__/
+**/__pycache__/
+
+*.py[cod]
+*.pyo
+*.pyd
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ragenv/
+ragas_env/
+
+backend/venv/
+backend/.venv/
+backend/env/
+backend/ragenv/
+backend/ragas_env/
+
+
+# =========================================================
+# RAG RUNTIME / GENERATED DATA
+# =========================================================
+
+# Main storage
+storage/
+storage_backup_before_rechunk/
+storage_backup_before_langsmith/
+
+# Backend runtime storage
 backend/sessions.db
 backend/chroma_db/
 backend/chunks/
@@ -10,24 +55,120 @@ backend/data/
 backend/flashrank_cache/
 backend/flashrank_test_cache/
 backend/uploads/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Vector databases / indexes
+chroma_db/
+**/chroma_db/
+
+# Generated chunks
+chunks/
+**/chunks/
+
+# Uploaded/generated documents
+uploads/
+**/uploads/
+
+
+# =========================================================
+# LOGS / RUNTIME
+# =========================================================
+logs/
+**/logs/
+
+*.log
+uvicorn.log
 backend/uvicorn.log
 
-# Eval tooling outputs (keep scripts, ignore generated results)
+
+# =========================================================
+# EVALUATION OUTPUTS
+# =========================================================
+
+# Generated evaluation results
 eval/*.csv
 eval/*.json
+
+evaluation/*.csv
+evaluation/*.json
+
+# Keep manually created benchmark/ground-truth templates
 !eval/ground_truth_template.csv
+!evaluation/ground_truth_template.csv
 
-# Python
-__pycache__/
-backend/__pycache__/
-*.pyc
-ragas_env/
-backend/ragas_env/
-ragenv/
+# evaluation/benchmark_120.json is curated benchmark data (120 hand-built
+# query/answer/context entries), not a generated run output — exempt it
+# from the evaluation/*.json blanket ignore above.
+!evaluation/benchmark_*.json
 
-# Editor/OS
-.vscode/
-.DS_Store
 
+# =========================================================
+# CACHE
+# =========================================================
 cache/
-cache/*
+**/cache/
+
+*.cache
+
+
+# =========================================================
+# IDE / EDITOR
+# =========================================================
+.vscode/
+.idea/
+
+*.swp
+*.swo
+*~
+
+.DS_Store
+Thumbs.db
+
+
+# =========================================================
+# BUILD / PACKAGING
+# =========================================================
+build/
+dist/
+.eggs/
+
+*.egg-info/
+pip-wheel-metadata/
+
+
+# =========================================================
+# BACKUPS
+# =========================================================
+backup_before_langsmith/
+backup_before_langsmith/*
+
+backup/
+backups/
+
+*.bak
+*.backup
+
+
+# =========================================================
+# TEMPORARY FILES
+# =========================================================
+*.tmp
+*.temp
+
+# macOS
+.AppleDouble
+.LSOverride
+
+
+# =========================================================
+# LOCAL DEVELOPMENT
+# =========================================================
+*.local
+
+# DeepEval
+.deepeval/
+evaluation/outputs/

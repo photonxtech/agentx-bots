@@ -48,7 +48,8 @@ print("Using DB:", DB_PATH.resolve())
 # --------------------------------------------------------------------------- #
 # Config — tune here if needed
 # --------------------------------------------------------------------------- #
-RAGAS_EVAL_MODEL = "llama-3.1-8b-instant"
+# eval_custom_ragas.py, eval_custom_ragas_ground_truth.py, eval_custom_ragas_ground_truth_json.py
+RAGAS_EVAL_MODEL = "openai/gpt-oss-20b"   # was: "llama-3.1-8b-instant"
 RAGAS_MAX_RETRIES = 3
 RAGAS_TIMEOUT_S = 30
 RAGAS_MAX_RETRY_WAIT = 60  # give up on a rate-limit wait longer than this

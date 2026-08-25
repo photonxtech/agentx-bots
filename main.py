@@ -1,3 +1,5 @@
+import os
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -18,9 +20,20 @@ app = FastAPI(
 
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
+# CORS_ALLOWED_ORIGINS in .env: comma-separated list, e.g.
+#   CORS_ALLOWED_ORIGINS=https://your-frontend.easypanel.host
+# Falls back to localhost dev origins if unset, so this stays a no-op change
+# locally but is safe to set strictly once deployed. allow_origins=["*"] was
+# a real gap — it let any website's JS call this API directly.
+_cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = (
+    [origin.strip() for origin in _cors_origins_env.split(",") if origin.strip()]
+    or ["http://localhost:8000", "http://127.0.0.1:8000"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to your frontend's EasyPanel URL once deployed
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -23,8 +23,9 @@ function isImageFile(name) {
 }
 
 // Detects fallback / "I don't know" style answers so we can suppress
-// the Sources panel for them (retrieval still ran, but nothing useful
-// was found, so showing "Sources" next to "I don't know" is misleading).
+// the Sources panel (and the metrics button) for them — retrieval ran,
+// but nothing useful was found, so showing "Sources"/"Calculate Metrics"
+// next to "I don't know" is misleading.
 function isFallbackAnswer(text) {
     if (!text) return false;
     const t = text.trim();
@@ -83,23 +84,28 @@ function renderDocList(pdfNames) {
     });
 }
 
-function renderMessage(role, content, extraHtml = "") {
+// renderMessage now returns the message body element instead of building
+// the whole bubble (sources + metrics) as one static innerHTML blob. That's
+// needed so the metrics section can be a real DOM node with its own click
+// handler (the "Calculate Metrics" button), not just a string of markup.
+function renderMessage(role, content) {
     const wrapper = document.createElement("div");
     wrapper.className = role === "user" ? "msg-row msg-row-user" : "msg-row msg-row-assistant";
 
+    let body;
     if (role === "user") {
-        const bubble = document.createElement("div");
-        bubble.className = "user-message";
-        bubble.innerHTML = content;
-        wrapper.appendChild(bubble);
+        body = document.createElement("div");
+        body.className = "user-message";
+        body.innerHTML = content;
     } else {
-        const body = document.createElement("div");
+        body = document.createElement("div");
         body.className = "assistant-message";
-        body.innerHTML = marked.parse(content) + extraHtml;
-        wrapper.appendChild(body);
+        body.innerHTML = marked.parse(content);
     }
 
+    wrapper.appendChild(body);
     chatWindow.appendChild(wrapper);
+    return body;
 }
 
 function sourcesHtml(sources, tokenUsage, answerText = "") {
@@ -125,10 +131,24 @@ function sourcesHtml(sources, tokenUsage, answerText = "") {
 
                 ${parsedSources.map(s => {
 
+                    // s.page comes in 3 different shapes depending on which
+                    // backend branch answered this turn:
+                    //   - a 0-indexed int from normal chunk retrieval -> show page+1
+                    //   - a numeric STRING like "247" from the direct page-lookup
+                    //     branch (get_answer's page_lookup path) -> this is already
+                    //     the human-facing page number the user typed, so it's
+                    //     shown as-is, NOT +1'd (that branch never had a 0-indexed
+                    //     int to begin with, and treating it as one previously
+                    //     always fell through to "Entire document" instead, since
+                    //     `typeof "247" === "number"` is false).
+                    //   - the literal string "full document" from the broad-summary
+                    //     branch -> "Entire document".
                     let pageText = "Entire document";
 
                     if (typeof s.page === "number") {
                         pageText = "Page: " + (s.page + 1);
+                    } else if (typeof s.page === "string" && /^\d+$/.test(s.page.trim())) {
+                        pageText = "Page: " + s.page.trim();
                     }
 
                     return `
@@ -175,11 +195,78 @@ function metricsHtml(metrics, answerText = "") {
     return `<div class="metrics-row">${items}</div>`;
 }
 
+// True only if the metrics object actually has at least one computed value —
+// distinguishes "never calculated yet" ({} from /chat) from "calculated but
+// the judge failed for everything" ({faithfulness: null, ...}).
+function hasAnyMetricValue(metrics) {
+    if (!metrics) return false;
+    return Object.values(metrics).some(v => v !== null && v !== undefined);
+}
+
+// Renders the "Calculate Metrics" button. Clicking it POSTs this exact
+// turn's question/answer/sources to /metrics/calculate — metrics are only
+// ever computed for a turn the user actually asks about, never automatically.
+function renderCalculateButton(container, { question, answer, sources, turnId }) {
+    const btn = document.createElement("button");
+    btn.className = "calc-metrics-btn";
+    btn.type = "button";
+    btn.innerText = "Calculate Metrics";
+
+    btn.onclick = async () => {
+        btn.disabled = true;
+        btn.innerText = "Calculating...";
+
+        try {
+            const response = await fetch("/metrics/calculate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ question, answer, sources: sources || [], turn_id: turnId ?? null })
+            });
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const data = await response.json();
+            container.innerHTML = metricsHtml(data.metrics, answer);
+        } catch (err) {
+            console.error("Error calculating metrics:", err);
+            btn.disabled = false;
+            btn.innerText = "Calculate Metrics (retry)";
+        }
+    };
+
+    container.innerHTML = "";
+    container.appendChild(btn);
+}
+
+// Appends the sources block + the metrics section (badges if already
+// computed, otherwise the button) under a rendered assistant message body.
+function appendSourcesAndMetrics(body, { question, answer, sources, tokenUsage, metrics, turnId }) {
+    const sourcesDiv = document.createElement("div");
+    sourcesDiv.innerHTML = sourcesHtml(sources, tokenUsage, answer);
+    body.appendChild(sourcesDiv);
+    if (isFallbackAnswer(answer)) return;
+    const metricsContainer = document.createElement("div");
+    metricsContainer.className = "metrics-container";
+    body.appendChild(metricsContainer);
+    if (hasAnyMetricValue(metrics)) {
+        metricsContainer.innerHTML = metricsHtml(metrics, answer);
+    } else {
+        renderCalculateButton(metricsContainer, { question, answer, sources, turnId });
+    }
+}
+
 function renderChatHistory(chatHistory) {
     chatWindow.innerHTML = "";
     (chatHistory || []).forEach(turn => {
         renderMessage("user", turn.question);
-        renderMessage("assistant", turn.answer, sourcesHtml(turn.sources, null, turn.answer) + metricsHtml(turn.metrics, turn.answer));
+        const body = renderMessage("assistant", turn.answer);
+        appendSourcesAndMetrics(body, {
+            question: turn.question,
+            answer: turn.answer,
+            sources: turn.sources,
+            tokenUsage: null,
+            metrics: turn.metrics
+        });
     });
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
@@ -386,7 +473,15 @@ async function sendMessage() {
         if (data.error) {
             renderMessage("assistant", `❌ ${data.error}`);
         } else {
-            renderMessage("assistant", data.answer, sourcesHtml(data.sources, data.token_usage, data.answer) + metricsHtml(data.metrics, data.answer));
+            const body = renderMessage("assistant", data.answer);
+            appendSourcesAndMetrics(body, {
+                question: question,
+                answer: data.answer,
+                sources: data.sources,
+                tokenUsage: data.token_usage,
+                metrics: data.metrics,
+                turnId: data.turn_id
+            });
         }
 
         chatWindow.scrollTop = chatWindow.scrollHeight;
@@ -411,3 +506,4 @@ async function sendMessage() {
         console.error("Error on initial load:", err);
     }
 })();
+

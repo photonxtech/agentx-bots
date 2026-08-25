@@ -2,6 +2,8 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import List, Optional
 import hashlib
 from pathlib import Path
+from langsmith import traceable
+from langsmith.run_helpers import get_current_run_tree
 
 from rag_utils import (
     create_session,
@@ -23,6 +25,7 @@ SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 
 
 @router.post("/upload")
+@traceable(name="upload_turn")
 async def upload_pdfs(
     files: List[UploadFile] = File(...),
     session_id: Optional[str] = Form(None),
@@ -48,6 +51,11 @@ async def upload_pdfs(
     """
     if not session_id or not session_exists(session_id):
         session_id = create_session()
+
+    run_tree = get_current_run_tree()
+    if run_tree:
+        run_tree.metadata["session_id"] = session_id
+        run_tree.tags = (run_tree.tags or []) + [f"session:{session_id}"]
 
     unsupported = [
         f.filename for f in files
