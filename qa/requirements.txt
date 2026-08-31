@@ -2,10 +2,13 @@ fastapi
 uvicorn
 python-multipart
 python-dotenv
-groq
+google-genai
 pymupdf
 httpx
 deepeval
 sentence-transformers
 langsmith
 chromadb
+python-docx
+openpyxl
+extract-msg

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" class="h-full antialiased">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,7 +9,9 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet">
     <script>
         tailwind.config = {
             theme: {
@@ -22,13 +25,15 @@
         }
     </script>
 </head>
+
 <body class="bg-slate-900 h-full flex overflow-hidden font-sans text-slate-100">
 
     <!-- Sidebar: Sessions List -->
     <aside class="w-72 bg-slate-950 text-slate-300 flex flex-col border-r border-slate-800/80 shrink-0 select-none">
         <div class="p-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-950">
             <div class="flex items-center gap-3">
-                <div class="h-8 w-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                <div
+                    class="h-8 w-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
                     <i class="fa-solid fa-vial-circle-check text-base"></i>
                 </div>
                 <div>
@@ -36,12 +41,15 @@
                     <p class="text-[10px] text-slate-500 font-medium">DeepEval Automation</p>
                 </div>
             </div>
-            <button onclick="createNewSession()" class="bg-indigo-600 hover:bg-indigo-500 text-white h-8 w-8 rounded-lg text-xs transition flex items-center justify-center shadow-lg shadow-indigo-600/20 active:scale-95" title="New Session">
+            <button onclick="createNewSession()"
+                class="bg-indigo-600 hover:bg-indigo-500 text-white h-8 w-8 rounded-lg text-xs transition flex items-center justify-center shadow-lg shadow-indigo-600/20 active:scale-95"
+                title="New Session">
                 <i class="fa-solid fa-plus"></i>
             </button>
         </div>
 
-        <div class="px-4 pt-4 pb-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+        <div
+            class="px-4 pt-4 pb-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
             <span>Test Sessions</span>
             <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">History</span>
         </div>
@@ -51,8 +59,9 @@
         </div>
 
         <div class="p-3 border-t border-slate-800/80 bg-slate-950">
-            <button onclick="exportGoldenDataset()" class="w-full bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 border border-slate-700/60 transition group shadow-sm">
-                <i class="fa-solid fa-download text-amber-400 group-hover:scale-110 transition-transform"></i> 
+            <button onclick="exportGoldenDataset()"
+                class="w-full bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 border border-slate-700/60 transition group shadow-sm">
+                <i class="fa-solid fa-download text-amber-400 group-hover:scale-110 transition-transform"></i>
                 Export Golden Dataset
             </button>
         </div>
@@ -60,14 +69,16 @@
 
     <!-- Main Workspace -->
     <main class="flex-1 flex flex-col min-w-0 bg-slate-900 overflow-hidden">
-        
+
         <!-- Top Workspace Bar -->
         <header class="h-16 bg-slate-950 border-b border-slate-800/80 px-6 flex items-center justify-between shrink-0">
             <div class="flex items-center gap-3 min-w-0">
                 <div class="truncate">
-                    <h2 id="sessionTitle" class="text-base font-semibold text-white truncate">Select or Create a Session</h2>
+                    <h2 id="sessionTitle" class="text-base font-semibold text-white truncate">Select or Create a Session
+                    </h2>
                     <div class="flex items-center gap-2 mt-0.5">
-                        <span id="sessionStatusBadge" class="inline-flex items-center text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                        <span id="sessionStatusBadge"
+                            class="inline-flex items-center text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
                             No Session Loaded
                         </span>
                     </div>
@@ -75,129 +86,198 @@
             </div>
 
             <div class="flex items-center gap-3 shrink-0">
-                <button onclick="openModelsModal()" class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium px-3 py-2 rounded-lg flex items-center gap-2 border border-slate-700/80 transition active:scale-95 shadow-sm">
+                <button onclick="openModelsModal()"
+                    class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium px-3 py-2 rounded-lg flex items-center gap-2 border border-slate-700/80 transition active:scale-95 shadow-sm">
                     <i class="fa-solid fa-sliders text-indigo-400"></i> Models & Params
-                </button>
-
-                <button id="approveBtn" onclick="approveGolden()" disabled class="bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:hover:bg-amber-500 text-slate-950 text-xs font-semibold px-3.5 py-2 rounded-lg flex items-center gap-2 transition shadow-md shadow-amber-500/10 active:scale-95">
-                    <i class="fa-solid fa-star text-slate-950"></i> Save to Golden Dataset
                 </button>
             </div>
         </header>
 
         <!-- Editor & Results Main Grid -->
         <div class="flex-1 p-6 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-6 bg-slate-900">
-            
+
             <!-- Left Panel: Input Configuration -->
             <div class="space-y-4 flex flex-col h-full min-h-0">
-                
+
                 <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-3">
                     <div class="flex items-center justify-between">
-                        <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-                            <i class="fa-solid fa-file-arrow-up text-indigo-400"></i> Source Document
+                        <label
+                            class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <i class="fa-solid fa-file-arrow-up text-indigo-400"></i> Source Documents
                         </label>
-                        <span class="text-[10px] text-slate-500">PDF, TXT, MD</span>
+                        <span class="text-[10px] text-slate-500">PDF, DOCX, XLSX, TXT, MD · Multiple allowed</span>
                     </div>
-                    
+
                     <div class="relative flex items-center justify-center w-full">
-                        <input type="file" id="fileInput" class="block w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600/20 file:text-indigo-300 hover:file:bg-indigo-600/30 file:transition cursor-pointer bg-slate-900 border border-slate-800 rounded-lg p-1">
+                        <input type="file" id="fileInput" multiple accept=".pdf,.docx,.xlsx,.txt,.md" onchange="handleFileSelection()"
+                            class="block w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600/20 file:text-indigo-300 hover:file:bg-indigo-600/30 file:transition cursor-pointer bg-slate-900 border border-slate-800 rounded-lg p-1">
                     </div>
-                    <p id="existingFileName" class="text-xs text-indigo-400 font-mono hidden flex items-center gap-1.5 pt-1">
-                        <i class="fa-solid fa-paperclip"></i> <span></span>
-                    </p>
+                    <p class="text-[10px] text-slate-500">Selected files are added to this session. Click Generate to
+                        regenerate the combined golden/QA dataset.</p>
+                    <div id="documentList" class="space-y-1.5 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+                        <!-- Current session documents populated dynamically -->
+                    </div>
                 </div>
 
-                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm flex-1 flex flex-col space-y-2 min-h-[300px]">
+                <div
+                    class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm flex-1 flex flex-col space-y-2 min-h-[300px]">
                     <div class="flex items-center justify-between">
-                        <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                        <label
+                            class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
                             <i class="fa-solid fa-code text-indigo-400"></i> Target JSON Schema / Guidelines
                         </label>
                         <span class="text-[10px] text-slate-500 font-mono">JSON</span>
                     </div>
-                    <textarea id="sampleJsonInput" class="w-full flex-1 p-3.5 bg-slate-900 text-indigo-300 rounded-lg font-mono text-xs border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none leading-relaxed" placeholder='{ "test_cases": [ { "input": "...", "expected": "..." } ] }'></textarea>
+                    <textarea id="sampleJsonInput"
+                        class="w-full flex-1 p-3.5 bg-slate-900 text-indigo-300 rounded-lg font-mono text-xs border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none leading-relaxed"
+                        placeholder='{ "test_cases": [ { "input": "...", "expected": "..." } ] }'></textarea>
                 </div>
 
-                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-2">
+                <!-- Generation Mode: Genesis Fields vs Generic -->
+                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-3">
                     <div class="flex items-center justify-between">
                         <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <i class="fa-solid fa-flask text-indigo-400"></i> Generation Mode
+                        </label>
+                    </div>
+                    <!-- Toggle row -->
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-lg p-1 border border-slate-800">
+                        <button id="modeGenericBtn" onclick="setGenerationMode('generic')"
+                            class="flex-1 text-xs font-semibold py-2 px-3 rounded-md transition text-center bg-indigo-600 text-white shadow">
+                            <i class="fa-solid fa-shuffle mr-1"></i> Generic QA
+                        </button>
+                        <button id="modeGenesisBtn" onclick="setGenerationMode('genesis')"
+                            class="flex-1 text-xs font-semibold py-2 px-3 rounded-md transition text-center text-slate-400 hover:text-slate-200">
+                            <i class="fa-solid fa-building-columns mr-1"></i> Genesis Fields
+                        </button>
+                    </div>
+                    <!-- Mode description -->
+                    <p id="modeDescription" class="text-[10px] text-slate-500 leading-relaxed">
+                        Generates QA test cases freely from your uploaded documents using DeepEval's Synthesizer.
+                    </p>
+                    <!-- Genesis field count selector (only visible in Genesis mode) -->
+                    <div id="genesisFieldCountBlock" class="hidden space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                                <i class="fa-solid fa-list-check text-indigo-400"></i> Fields to Generate
+                            </label>
+                            <span class="text-[10px] text-slate-500">Sampled randomly each run</span>
+                        </div>
+                        <select id="genesisFieldCountInput"
+                            class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer">
+                            <option value="10">10 — Random sample</option>
+                            <option value="20">20 — Random sample</option>
+                            <option value="32" selected>32 — All fields</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Test Case Depth (hidden in Genesis mode) -->
+                <div id="testCaseDepthBlock" class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label
+                            class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
                             <i class="fa-solid fa-layer-group text-indigo-400"></i> Test Case Depth
                         </label>
                         <span class="text-[10px] text-slate-500">Count controls scope</span>
                     </div>
-                    <select id="testCaseCountInput" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer">
+                    <select id="testCaseCountInput"
+                        class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer">
                         <option value="10">10 — Core concepts only</option>
                         <option value="20" selected>20 — Core + Sub-topics</option>
                         <option value="30">30 — Deep observation (edge cases + cross-refs)</option>
                     </select>
                 </div>
 
-                <button id="generateBtn" onclick="runGeneration()" disabled class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-600/20 transition flex items-center justify-center gap-2 active:scale-[0.99] shrink-0">
-                    <i class="fa-solid fa-bolt"></i> Generate QA Testcases & Evaluate
+                <button id="generateBtn" onclick="runGeneration()" disabled
+                    class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-600/20 transition flex items-center justify-center gap-2 active:scale-[0.99] shrink-0">
+                    <i class="fa-solid fa-bolt"></i> <span id="generateBtnLabel">Generate QA Testcases &amp; Evaluate</span>
                 </button>
             </div>
 
             <!-- Right Panel: Output & Dynamic Metrics Dashboard -->
             <div class="space-y-4 flex flex-col h-full min-h-0">
-                
+
                 <!-- Golden Dataset (synthesized via DeepEval Synthesizer from the source doc) -->
-                <div id="goldenPanel" class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm hidden space-y-3">
+                <div id="goldenPanel"
+                    class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm hidden space-y-3">
                     <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
                         <div class="flex items-center gap-2">
                             <i class="fa-solid fa-star-of-life text-amber-400 text-sm"></i>
-                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">Synthetic Golden Dataset</span>
+                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">Synthetic Golden
+                                Dataset</span>
                         </div>
-                        <span id="goldenCountBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
+                        <span id="goldenCountBadge"
+                            class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
                     </div>
-                    <p class="text-[11px] text-slate-500 leading-relaxed">Generated by DeepEval's Synthesizer directly from your document. Used as ground truth for generation and evaluation below — read-only.</p>
+                    <p class="text-[11px] text-slate-500 leading-relaxed" id="goldenPanelDescription">Generated by DeepEval's Synthesizer directly
+                        from your document. Used as ground truth for generation and evaluation below — read-only.</p>
                     <div id="goldenList" class="space-y-2 max-h-[260px] overflow-y-auto pr-1 custom-scrollbar">
                         <!-- Populated dynamically -->
                     </div>
                 </div>
 
                 <!-- Dynamic Multi-Metric DeepEval Panel (aggregate score, shown right after generation) -->
-                <div id="evalPanel" class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm hidden space-y-4">
+                <div id="evalPanel"
+                    class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm hidden space-y-4">
                     <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
                         <div class="flex items-center gap-2">
                             <i class="fa-solid fa-chart-line text-indigo-400 text-sm"></i>
-                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">DeepEval Metrics Breakdown</span>
+                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">DeepEval Metrics
+                                Breakdown</span>
                         </div>
                         <div class="flex items-center gap-2">
-                            <span id="overallScoreHeader" class="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Overall: 0%</span>
-                            <span id="evalPassedBadge" class="text-[10px] font-bold px-2.5 py-0.5 rounded-full border"></span>
+                            <span id="overallScoreHeader"
+                                class="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Overall:
+                                0%</span>
+                            <span id="evalPassedBadge"
+                                class="text-[10px] font-bold px-2.5 py-0.5 rounded-full border"></span>
                         </div>
                     </div>
 
                     <!-- Dynamic Metric Cards Grid -->
-                    <div id="metricsGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
+                    <div id="metricsGrid"
+                        class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
                         <!-- Populated Dynamically based on backend response -->
                     </div>
 
                     <!-- Evaluation Run Metadata (non-metric context, not rendered as score cards) -->
                     <div id="evalMetaRow" class="hidden flex items-center gap-2 flex-wrap text-[10px] font-mono">
-                        <span id="evalChunkCountBadge" class="hidden px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
-                        <span id="evalRefTypeBadge" class="hidden px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
+                        <span id="evalChunkCountBadge"
+                            class="hidden px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
+                        <span id="evalRefTypeBadge"
+                            class="hidden px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
                     </div>
 
                     <!-- Detailed Metric Feedback & Reasons -->
-                    <div id="evalReasoningContainer" class="text-xs bg-slate-900/60 p-3 rounded-lg border border-slate-800/80 text-slate-300 space-y-1.5">
+                    <div id="evalReasoningContainer"
+                        class="text-xs bg-slate-900/60 p-3 rounded-lg border border-slate-800/80 text-slate-300 space-y-1.5">
                         <div class="flex items-center justify-between">
-                            <span class="font-semibold text-slate-300 text-[11px] uppercase tracking-wider">Evaluation Reasoning & Diagnostics</span>
+                            <span class="font-semibold text-slate-300 text-[11px] uppercase tracking-wider">Evaluation
+                                Reasoning & Diagnostics</span>
                             <span id="metricReasonCount" class="text-[10px] text-slate-500 font-mono"></span>
                         </div>
-                        <div id="evalReasonText" class="space-y-1 text-slate-400 font-mono text-[11px] max-h-32 overflow-y-auto custom-scrollbar leading-relaxed"></div>
+                        <div id="evalReasonText"
+                            class="space-y-1 text-slate-400 font-mono text-[11px] max-h-32 overflow-y-auto custom-scrollbar leading-relaxed">
+                        </div>
                     </div>
                 </div>
 
                 <!-- Per-Question RAG Pipeline Evaluation -->
-                <div id="ragResultsPanel" class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm hidden space-y-3">
+                <div id="ragResultsPanel"
+                    class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm hidden space-y-3">
                     <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
                         <div class="flex items-center gap-2">
                             <i class="fa-solid fa-diagram-project text-indigo-400 text-sm"></i>
-                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">RAG Pipeline — Per-Question Metrics</span>
+                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">RAG Pipeline —
+                                Per-Question Metrics</span>
                         </div>
                         <div class="flex items-center gap-2">
-                            <span id="ragOverallHeader" class="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Overall: 0%</span>
-                            <span id="ragChunkBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
+                            <span id="ragOverallHeader"
+                                class="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">Overall:
+                                0%</span>
+                            <span id="ragChunkBadge"
+                                class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-400 border border-slate-700"></span>
                         </div>
                     </div>
                     <div class="overflow-auto max-h-[420px] custom-scrollbar rounded-lg border border-slate-800/80">
@@ -224,32 +304,42 @@
                 </div>
 
                 <!-- Document Chat (one question at a time) -->
-                <div id="documentChatPanel" class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-3">
+                <div id="documentChatPanel"
+                    class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm space-y-3">
                     <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
                         <div class="flex items-center gap-2">
                             <i class="fa-solid fa-comments text-indigo-400 text-sm"></i>
-                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">Ask About This Document</span>
+                            <span class="text-xs font-bold text-slate-200 uppercase tracking-wider">Ask About This
+                                Document</span>
                         </div>
-                        <span id="chatConfigBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-500 border border-slate-800">Configuration not saved</span>
+                        <span id="chatConfigBadge"
+                            class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 text-slate-500 border border-slate-800">Configuration
+                            not saved</span>
                     </div>
 
-                    <textarea id="chatQuestionInput" rows="2" disabled placeholder="Save the RAG configuration first..." class="w-full p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-xs border border-slate-800/80 leading-relaxed resize-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none disabled:opacity-50"></textarea>
+                    <textarea id="chatQuestionInput" rows="2" disabled placeholder="Save the RAG configuration first..."
+                        class="w-full p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-xs border border-slate-800/80 leading-relaxed resize-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none disabled:opacity-50"></textarea>
                     <div class="flex justify-end">
-                        <button id="chatAskBtn" onclick="askDocumentQuestion()" disabled class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center gap-2 transition">
+                        <button id="chatAskBtn" onclick="askDocumentQuestion()" disabled
+                            class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center gap-2 transition">
                             <i class="fa-solid fa-paper-plane"></i> Ask
                         </button>
                     </div>
 
                     <div id="chatHistory" class="space-y-3 max-h-[520px] overflow-y-auto custom-scrollbar pr-1"></div>
 
-                    <div id="chatAnswerCard" class="hidden bg-slate-900/70 border border-slate-800 rounded-lg p-3 space-y-3">
+                    <div id="chatAnswerCard"
+                        class="hidden bg-slate-900/70 border border-slate-800 rounded-lg p-3 space-y-3">
                         <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Answer</div>
-                        <div id="chatAnswerText" class="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap"></div>
+                        <div id="chatAnswerText" class="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
+                        </div>
                         <div class="flex items-center gap-2 pt-1">
-                            <button id="chatThumbUp" onclick="submitChatFeedback('yes')" title="Good answer" class="w-8 h-8 rounded-lg border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/40 transition">
+                            <button id="chatThumbUp" onclick="submitChatFeedback('yes')" title="Good answer"
+                                class="w-8 h-8 rounded-lg border border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/40 transition">
                                 <i class="fa-regular fa-thumbs-up"></i>
                             </button>
-                            <button id="chatThumbDown" onclick="submitChatFeedback('no')" title="Bad answer" class="w-8 h-8 rounded-lg border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition">
+                            <button id="chatThumbDown" onclick="submitChatFeedback('no')" title="Bad answer"
+                                class="w-8 h-8 rounded-lg border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition">
                                 <i class="fa-regular fa-thumbs-down"></i>
                             </button>
                             <span id="chatFeedbackStatus" class="text-[10px] font-mono text-slate-500"></span>
@@ -257,14 +347,26 @@
                         <div id="chatNegativeFeedback" class="hidden space-y-2 pt-1">
                             <label class="text-[10px] text-slate-400">What was wrong with this answer?</label>
                             <div class="flex flex-wrap gap-1.5">
-                                <button type="button" onclick="submitNegativeReason('Incorrect information')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Incorrect information</button>
-                                <button type="button" onclick="submitNegativeReason('Not enough detail')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Not enough detail</button>
-                                <button type="button" onclick="submitNegativeReason('Did not answer the question')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Did not answer</button>
-                                <button type="button" onclick="submitNegativeReason('Poorly retrieved information')" class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Poor retrieval</button>
+                                <button type="button" onclick="submitNegativeReason('Incorrect information')"
+                                    class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Incorrect
+                                    information</button>
+                                <button type="button" onclick="submitNegativeReason('Not enough detail')"
+                                    class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Not
+                                    enough detail</button>
+                                <button type="button" onclick="submitNegativeReason('Did not answer the question')"
+                                    class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Did
+                                    not answer</button>
+                                <button type="button" onclick="submitNegativeReason('Poorly retrieved information')"
+                                    class="px-2 py-1 text-[10px] rounded border border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-300">Poor
+                                    retrieval</button>
                             </div>
                             <div class="flex gap-2">
-                                <input id="chatOtherReason" type="text" maxlength="500" placeholder="Other reason (optional)" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-[10px] text-slate-200 outline-none focus:border-indigo-500">
-                                <button type="button" onclick="submitNegativeReason(document.getElementById('chatOtherReason').value)" class="px-3 py-2 text-[10px] rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700">Submit</button>
+                                <input id="chatOtherReason" type="text" maxlength="500"
+                                    placeholder="Other reason (optional)"
+                                    class="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-[10px] text-slate-200 outline-none focus:border-indigo-500">
+                                <button type="button"
+                                    onclick="submitNegativeReason(document.getElementById('chatOtherReason').value)"
+                                    class="px-3 py-2 text-[10px] rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700">Submit</button>
                             </div>
                         </div>
                     </div>
@@ -273,14 +375,18 @@
                 </div>
 
                 <!-- Generated Dataset Output (editable) -->
-                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm flex-1 flex flex-col min-h-[350px]">
+                <div
+                    class="bg-slate-950 p-4 rounded-xl border border-slate-800/80 shadow-sm flex-1 flex flex-col min-h-[350px]">
                     <div class="flex items-center justify-between mb-2 gap-2">
-                        <label class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2 shrink-0">
-                            <i class="fa-solid fa-file-pen text-indigo-400"></i> Generated QA Dataset <span class="text-[9px] font-normal normal-case text-slate-500">(editable)</span>
+                        <label
+                            class="block text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2 shrink-0">
+                            <i class="fa-solid fa-file-pen text-indigo-400"></i> Generated QA Dataset <span
+                                class="text-[9px] font-normal normal-case text-slate-500">(editable)</span>
                         </label>
                         <div class="flex items-center gap-2 min-w-0">
                             <span id="countBadge" class="hidden text-[10px] text-slate-500 font-mono truncate"></span>
-                            <select id="exportFormatInput" title="Export format (applies on download only)" class="bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-[10px] text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer shrink-0">
+                            <select id="exportFormatInput" title="Export format (applies on download only)"
+                                class="bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-[10px] text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer shrink-0">
                                 <option value="json" selected>JSON</option>
                                 <option value="jsonl">JSONL</option>
                                 <option value="qa">QA (Text)</option>
@@ -288,18 +394,23 @@
                         </div>
                     </div>
 
-                    <textarea id="outputEditor" spellcheck="false" oninput="onOutputEditorChange()" placeholder="No output generated yet." class="w-full flex-1 p-3.5 bg-slate-900 text-emerald-400 rounded-lg font-mono text-xs overflow-auto border border-slate-800/80 leading-relaxed custom-scrollbar resize-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"></textarea>
+                    <textarea id="outputEditor" spellcheck="false" oninput="onOutputEditorChange()"
+                        placeholder="No output generated yet."
+                        class="w-full flex-1 p-3.5 bg-slate-900 text-emerald-400 rounded-lg font-mono text-xs overflow-auto border border-slate-800/80 leading-relaxed custom-scrollbar resize-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"></textarea>
                     <p id="editStatus" class="text-[10px] font-mono mt-1.5 hidden"></p>
 
                     <div class="mt-3 flex justify-between items-center gap-2">
-                        <button id="reEvaluateBtn" onclick="reEvaluateEdits()" disabled class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2 px-3.5 rounded-lg flex items-center gap-2 border border-slate-700/80 disabled:opacity-30 transition">
+                        <button id="reEvaluateBtn" onclick="reEvaluateEdits()" disabled
+                            class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2 px-3.5 rounded-lg flex items-center gap-2 border border-slate-700/80 disabled:opacity-30 transition">
                             <i class="fa-solid fa-rotate text-indigo-400"></i> Re-evaluate
                         </button>
                         <div class="flex items-center gap-2">
-                            <button id="saveEditsBtn" onclick="saveEdits()" disabled class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-xs font-semibold py-2 px-3.5 rounded-lg flex items-center gap-2 transition">
+                            <button id="saveEditsBtn" onclick="saveEdits()" disabled
+                                class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-xs font-semibold py-2 px-3.5 rounded-lg flex items-center gap-2 transition">
                                 <i class="fa-solid fa-floppy-disk"></i> Save Edits
                             </button>
-                            <button id="downloadJsonBtn" onclick="downloadCurrentOutput()" disabled class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2 px-3.5 rounded-lg flex items-center gap-2 border border-slate-700/80 disabled:opacity-30 transition">
+                            <button id="downloadJsonBtn" onclick="downloadCurrentOutput()" disabled
+                                class="bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium py-2 px-3.5 rounded-lg flex items-center gap-2 border border-slate-700/80 disabled:opacity-30 transition">
                                 <i class="fa-solid fa-download text-emerald-400"></i> Download
                             </button>
                         </div>
@@ -311,8 +422,10 @@
     </main>
 
     <!-- Models & Parameters Configuration Modal -->
-    <div id="modelsModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-xl w-full p-6 space-y-5 max-h-[90vh] flex flex-col">
+    <div id="modelsModal"
+        class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4">
+        <div
+            class="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-xl w-full p-6 space-y-5 max-h-[90vh] flex flex-col">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
                 <h3 class="font-bold text-white text-base flex items-center gap-2">
                     <i class="fa-solid fa-sliders text-indigo-400"></i> Models & Parameter Configuration
@@ -322,44 +435,66 @@
                 </button>
             </div>
 
-            <form id="modelsForm" onsubmit="handleModelFormSubmit(event)" class="space-y-4 overflow-y-auto pr-1 flex-1 custom-scrollbar">
+            <form id="modelsForm" onsubmit="handleModelFormSubmit(event)"
+                class="space-y-4 overflow-y-auto pr-1 flex-1 custom-scrollbar">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chat Model</label>
-                        <input type="text" id="chatModelInput" placeholder="gpt-4o, claude-3-5-sonnet..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                        <label
+                            class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chat
+                            Model</label>
+                        <input type="text" id="chatModelInput" placeholder="gpt-4o, claude-3-5-sonnet..."
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
                     </div>
 
                     <div>
-                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Embedding Model</label>
-                        <input type="text" id="embeddingModelInput" placeholder="text-embedding-3-small..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                        <label
+                            class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Embedding
+                            Model</label>
+                        <input type="text" id="embeddingModelInput" placeholder="text-embedding-3-small..."
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
                     </div>
 
                     <div>
-                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chunk Size</label>
-                        <input type="number" id="chunkSizeInput" placeholder="1000" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                        <label
+                            class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chunk
+                            Size</label>
+                        <input type="number" id="chunkSizeInput" placeholder="1000"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
                     </div>
 
                     <div>
-                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chunk Overlap</label>
-                        <input type="number" id="chunkOverlapInput" placeholder="200" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                        <label
+                            class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Chunk
+                            Overlap</label>
+                        <input type="number" id="chunkOverlapInput" placeholder="200"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
                     </div>
 
                     <div>
-                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Top K</label>
-                        <input type="number" id="topKInput" placeholder="4" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                        <label
+                            class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Top
+                            K</label>
+                        <input type="number" id="topKInput" placeholder="4"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
                     </div>
 
                     <div>
-                        <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Search Model</label>
-                        <input type="text" id="searchModelInput" placeholder="similarity" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
+                        <label
+                            class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Search
+                            Model</label>
+                        <input type="text" id="searchModelInput" placeholder="similarity"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono">
                     </div>
 
                     <div class="col-span-2 pt-1">
                         <div class="flex justify-between items-center mb-1.5">
-                            <label class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Temperature</label>
+                            <label
+                                class="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Temperature</label>
                             <span id="tempValueDisplay" class="text-xs font-mono font-bold text-indigo-400">0.0</span>
                         </div>
-                        <input type="range" id="temperatureInput" min="0" max="1" step="0.05" value="0" oninput="document.getElementById('tempValueDisplay').innerText = this.value" class="w-full accent-indigo-500 h-1 bg-slate-950 rounded-lg appearance-none cursor-pointer">
+                        <input type="range" id="temperatureInput" min="0" max="1" step="0.05" value="0"
+                            oninput="document.getElementById('tempValueDisplay').innerText = this.value"
+                            class="w-full accent-indigo-500 h-1 bg-slate-950 rounded-lg appearance-none cursor-pointer">
                     </div>
                 </div>
 
@@ -367,10 +502,12 @@
 
                 <div class="pt-3">
                     <div class="flex gap-2">
-                        <button type="submit" id="saveConfigBtn" class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold py-2.5 px-4 rounded-lg text-xs transition shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2">
+                        <button type="submit" id="saveConfigBtn"
+                            class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold py-2.5 px-4 rounded-lg text-xs transition shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2">
                             <i class="fa-solid fa-floppy-disk"></i> Save Configuration
                         </button>
-                        <button type="button" id="runRagBtn" onclick="runRagPipeline()" class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-100 font-semibold py-2.5 px-4 rounded-lg text-xs transition flex items-center justify-center gap-2">
+                        <button type="button" id="runRagBtn" onclick="runRagPipeline()"
+                            class="flex-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-100 font-semibold py-2.5 px-4 rounded-lg text-xs transition flex items-center justify-center gap-2">
                             <i class="fa-solid fa-play"></i> Run RAG Pipeline
                         </button>
                     </div>
@@ -430,7 +567,7 @@
                 document.getElementById('sessionTitle').innerText = s.title;
                 document.getElementById('sampleJsonInput').value = s.sample_json || '';
                 document.getElementById('testCaseCountInput').value = s.test_case_count ? String(s.test_case_count) : '20';
-                
+
                 const badge = document.getElementById('sessionStatusBadge');
                 badge.innerText = s.is_golden ? 'Golden Dataset' : (s.status || 'Active');
                 badge.className = `inline-flex items-center text-[10px] font-medium px-2 py-0.5 rounded-full border ${s.is_golden ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`;
@@ -441,14 +578,9 @@
                 // file selected yet, and a stale File object could get resent
                 // on the next Generate click.
                 document.getElementById('fileInput').value = '';
+                pendingSelectedFiles = [];
 
-                const fileNameText = document.getElementById('existingFileName');
-                if (s.filename) {
-                    fileNameText.querySelector('span').innerText = s.filename;
-                    fileNameText.classList.remove('hidden');
-                } else {
-                    fileNameText.classList.add('hidden');
-                }
+                renderDocumentList(s.documents || []);
 
                 currentGeneratedData = s.generated_data;
                 lastSavedQAString = currentGeneratedData ? JSON.stringify(currentGeneratedData, null, 2) : '';
@@ -485,6 +617,98 @@
             }
         }
 
+        let pendingSelectedFiles = [];
+
+        function renderPendingDocumentList() {
+            const list = document.getElementById('documentList');
+            if (!list) return;
+            list.innerHTML = '';
+
+            if (pendingSelectedFiles.length === 0) {
+                list.innerHTML = '<p class="text-[10px] text-slate-600 italic">No documents selected yet.</p>';
+                return;
+            }
+
+            pendingSelectedFiles.forEach((file, index) => {
+                const row = document.createElement('div');
+                row.className = 'flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5';
+                row.innerHTML = `
+                    <div class="flex items-center gap-2 min-w-0">
+                        <i class="fa-solid fa-file-lines text-indigo-400 text-[10px]"></i>
+                        <span class="text-[10px] text-slate-300 font-mono truncate" title="${file.name.replace(/"/g, '&quot;')}">${file.name.replace(/</g, '&lt;')}</span>
+                    </div>
+                    <button type="button" class="text-[10px] text-slate-500 hover:text-red-400 shrink-0" title="Remove selected file" onclick="removePendingDocument(${index})">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                `;
+                list.appendChild(row);
+            });
+        }
+
+        function syncFileInputFromPending() {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput) return;
+            const dataTransfer = new DataTransfer();
+            pendingSelectedFiles.forEach(file => dataTransfer.items.add(file));
+            fileInput.files = dataTransfer.files;
+        }
+
+        function removePendingDocument(index) {
+            pendingSelectedFiles.splice(index, 1);
+            syncFileInputFromPending();
+            renderPendingDocumentList();
+        }
+
+        function handleFileSelection() {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput) return;
+            pendingSelectedFiles = Array.from(fileInput.files || []);
+            renderPendingDocumentList();
+        }
+
+        function renderDocumentList(documents) {
+            const list = document.getElementById('documentList');
+            if (!list) return;
+            list.innerHTML = '';
+
+            if (!documents || documents.length === 0) {
+                list.innerHTML = '<p class="text-[10px] text-slate-600 italic">No documents uploaded yet.</p>';
+                return;
+            }
+
+            documents.forEach((doc, index) => {
+                const row = document.createElement('div');
+                row.className = 'flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5';
+                row.innerHTML = `
+                    <div class="flex items-center gap-2 min-w-0">
+                        <i class="fa-solid fa-file-lines text-indigo-400 text-[10px]"></i>
+                        <span class="text-[10px] text-slate-300 font-mono truncate" title="${(doc.filename || '').replace(/"/g, '&quot;')}">${(doc.filename || `Document ${index + 1}`).replace(/</g, '&lt;')}</span>
+                    </div>
+                    <button type="button" class="text-[10px] text-slate-500 hover:text-red-400 shrink-0" title="Remove document" onclick="removeSessionDocument('${doc.document_id}')">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                `;
+                list.appendChild(row);
+            });
+        }
+
+        async function removeSessionDocument(documentId) {
+            if (!activeSessionId || !documentId) return;
+            if (!confirm('Remove this document from the session? You will need to click Generate again to rebuild the combined goldens and QA.')) return;
+
+            try {
+                const res = await fetch(`/api/sessions/${activeSessionId}/documents/${documentId}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) {
+                    alert(data.detail || 'Could not remove document.');
+                    return;
+                }
+                await selectSession(activeSessionId);
+            } catch (err) {
+                alert('Could not remove document: ' + err.message);
+            }
+        }
+
         // Renders the read-only synthetic golden dataset list (from DeepEval's
         // Synthesizer). Each golden's question/expected_output/context is the
         // ground truth used for generation and for the per-item eval table.
@@ -492,6 +716,7 @@
             const panel = document.getElementById('goldenPanel');
             const list = document.getElementById('goldenList');
             const badge = document.getElementById('goldenCountBadge');
+            const desc = document.getElementById('goldenPanelDescription');
 
             if (!goldens || goldens.length === 0) {
                 panel.classList.add('hidden');
@@ -502,17 +727,32 @@
             panel.classList.remove('hidden');
             badge.innerText = `${goldens.length} golden${goldens.length === 1 ? '' : 's'}`;
 
+            // Update description based on which mode produced the goldens
+            const isGenesisGoldens = goldens.length > 0 && goldens[0].field_name;
+            if (desc) {
+                desc.textContent = isGenesisGoldens
+                    ? `One golden per sampled Genesis Capital field (${goldens.length} of 32). User-input-only fields excluded. Date of Report always included. Used as ground truth for evaluation — read-only.`
+                    : "Generated by DeepEval's Synthesizer directly from your document. Used as ground truth for generation and evaluation below — read-only.";
+            }
+
             list.innerHTML = '';
             goldens.forEach((g, idx) => {
                 const contextPreview = Array.isArray(g.context) ? g.context.join(' ') : (g.context || '');
+                const sourceDocs = Array.isArray(g.source_documents) ? g.source_documents.join(', ') : (g.source_documents || '');
+                // In genesis mode show the field section as a badge alongside the index
+                const sectionBadge = g.section
+                    ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-indigo-400 border border-slate-700 shrink-0">${g.section.replace(/</g, '&lt;')}</span>`
+                    : '';
                 const card = document.createElement('div');
                 card.className = 'bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 space-y-1';
                 card.innerHTML = `
                     <div class="flex items-start justify-between gap-2">
                         <span class="text-[10px] font-bold text-amber-400 shrink-0">#${idx + 1}</span>
+                        ${sectionBadge}
                         <p class="text-[11px] text-slate-200 leading-relaxed">${(g.question || '').replace(/</g, '&lt;')}</p>
                     </div>
                     <p class="text-[11px] text-emerald-400/90 leading-relaxed pl-5">${(g.expected_output || '—').replace(/</g, '&lt;')}</p>
+                    ${sourceDocs ? `<p class="text-[10px] text-indigo-400/80 font-mono pl-5 truncate" title="${sourceDocs.replace(/"/g, '&quot;')}">Source: ${sourceDocs.replace(/</g, '&lt;')}</p>` : ''}
                     <p class="text-[10px] text-slate-500 font-mono pl-5 truncate" title="${contextPreview.replace(/"/g, '&quot;')}">${truncateText(contextPreview, 110)}</p>
                 `;
                 list.appendChild(card);
@@ -534,7 +774,11 @@
             const overall = details.overall_score !== undefined ? details.overall_score : details.score;
             const passed = details.passed;
 
-            document.getElementById('overallScoreHeader').innerText = `Overall: ${Math.round((overall || 0) * 100)}%`;
+            // Genesis mode shows fields found count alongside the score
+            const fieldsInfo = (details.fields_found !== undefined)
+                ? ` · ${details.fields_found}/${details.fields_total} fields` : '';
+            document.getElementById('overallScoreHeader').innerText =
+                `Overall: ${Math.round((overall || 0) * 100)}%${fieldsInfo}`;
 
             const badge = document.getElementById('evalPassedBadge');
             badge.innerText = passed ? 'PASSED' : 'NEEDS REVIEW';
@@ -555,7 +799,11 @@
                 'g_eval': { title: 'G-Eval Schema', color: 'purple' },
                 'hallucination': { title: 'Hallucination', color: 'rose' },
                 'toxicity': { title: 'Toxicity', color: 'amber' },
-                'bias': { title: 'Bias Metric', color: 'pink' }
+                'bias': { title: 'Bias Metric', color: 'pink' },
+                // Genesis field extraction metrics
+                'genesis_coverage': { title: 'Field Coverage', color: 'emerald' },
+                'format_score': { title: 'Format Valid', color: 'indigo' },
+                'dropdown_accuracy': { title: 'Dropdown Accuracy', color: 'violet' },
             };
 
             // Fields that are run metadata, not scored metrics — must be excluded
@@ -563,7 +811,8 @@
             // bogus metric cards (e.g. retrieval_chunk_count: 6 -> "600%").
             const NON_METRIC_FIELDS = [
                 'overall_score', 'score', 'passed', 'reason', 'reasons',
-                'used_independent_reference', 'retrieval_chunk_count'
+                'used_independent_reference', 'retrieval_chunk_count',
+                'skipped', 'fields_found', 'fields_total', 'not_found_fields',
             ];
 
             // Collect metrics dict from details.metrics or key-value pairs in deepeval_details
@@ -692,20 +941,61 @@
             badge.classList.remove('hidden');
         }
 
+        // ── Genesis / Generic mode toggle ─────────────────────────────────────
+        let genesisMode = false;
+
+        function setGenerationMode(mode) {
+            genesisMode = (mode === 'genesis');
+
+            const genericBtn  = document.getElementById('modeGenericBtn');
+            const genesisBtn  = document.getElementById('modeGenesisBtn');
+            const depthBlock  = document.getElementById('testCaseDepthBlock');
+            const modeDesc    = document.getElementById('modeDescription');
+            const btnLabel    = document.getElementById('generateBtnLabel');
+            const fieldCountBlock = document.getElementById('genesisFieldCountBlock');
+
+            const activeClass   = ['bg-indigo-600', 'text-white', 'shadow'];
+            const inactiveClass = ['text-slate-400', 'hover:text-slate-200'];
+
+            if (genesisMode) {
+                genesisBtn.classList.add(...activeClass);
+                genesisBtn.classList.remove(...inactiveClass);
+                genericBtn.classList.remove(...activeClass);
+                genericBtn.classList.add(...inactiveClass);
+                depthBlock.classList.add('hidden');
+                fieldCountBlock.classList.remove('hidden');
+                modeDesc.textContent = 'Generates one golden & test case per sampled Genesis Capital field. Date of Report is always included. User-input-only fields are excluded.';
+                btnLabel.textContent = 'Generate Genesis Field QA & Evaluate';
+            } else {
+                genericBtn.classList.add(...activeClass);
+                genericBtn.classList.remove(...inactiveClass);
+                genesisBtn.classList.remove(...activeClass);
+                genesisBtn.classList.add(...inactiveClass);
+                depthBlock.classList.remove('hidden');
+                fieldCountBlock.classList.add('hidden');
+                modeDesc.textContent = 'Generates QA test cases freely from your uploaded documents using DeepEval\'s Synthesizer.';
+                btnLabel.textContent = 'Generate QA Testcases & Evaluate';
+            }
+        }
+
         async function runGeneration() {
             if (!activeSessionId) return;
 
             const btn = document.getElementById('generateBtn');
             btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Processing & Evaluating...`;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${genesisMode ? 'Extracting Genesis Fields...' : 'Processing & Evaluating...'}`;
 
             const formData = new FormData();
             formData.append('sample_json', document.getElementById('sampleJsonInput').value);
             formData.append('test_case_count', document.getElementById('testCaseCountInput').value);
-            
+            formData.append('genesis_mode', genesisMode ? 'true' : 'false');
+            formData.append('genesis_field_count', genesisMode
+                ? (document.getElementById('genesisFieldCountInput').value || '32')
+                : '32');
+
             const fileInput = document.getElementById('fileInput');
-            if (fileInput.files[0]) {
-                formData.append('file', fileInput.files[0]);
+            for (const selectedFile of Array.from(fileInput.files || [])) {
+                formData.append('files', selectedFile);
             }
 
             try {
@@ -734,9 +1024,13 @@
                 }
             } catch (err) {
                 alert("Error calling endpoint: " + err.message);
+                // Results may still have been saved to the session DB — reload them
+                if (activeSessionId) {
+                    try { await selectSession(activeSessionId); } catch (_) {}
+                }
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = `<i class="fa-solid fa-bolt"></i> Generate QA Testcases & Evaluate`;
+                btn.innerHTML = `<i class="fa-solid fa-bolt"></i> <span id="generateBtnLabel">${genesisMode ? 'Generate Genesis Field QA &amp; Evaluate' : 'Generate QA Testcases &amp; Evaluate'}</span>`;
             }
         }
 
@@ -1104,7 +1398,7 @@
         let currentChatMessageId = null;
         let currentChatQuestion = '';
 
-        document.getElementById('chatQuestionInput').addEventListener('keydown', function(event) {
+        document.getElementById('chatQuestionInput').addEventListener('keydown', function (event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 if (!this.disabled) askDocumentQuestion();
@@ -1342,10 +1636,15 @@
         }
 
         function exportGoldenDataset() {
-            window.open('/api/golden-dataset/export', '_blank');
+            if (!activeSessionId) {
+                alert('Select a session first.');
+                return;
+            }
+            window.open(`/api/sessions/${activeSessionId}/golden-dataset/export`, '_blank');
         }
 
         loadSessions();
     </script>
 </body>
+
 </html>

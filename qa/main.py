@@ -9,7 +9,7 @@ import hashlib
 import asyncio
 import threading
 import sqlite3
-from typing import Optional, List
+from typing import Any, List, Optional, Dict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,10 +34,87 @@ def get_langsmith_client():
         _LANGSMITH_CLIENT = LangSmithClient()
     return _LANGSMITH_CLIENT
 
+
+def save_golden_dataset_to_langsmith(session_id: str, golden_items: List[dict]) -> Optional[str]:
+    """Stores the session's combined DeepEval golden dataset in one LangSmith
+    dataset. Regeneration replaces the existing examples for that session,
+    while preserving the same dataset ID. Each example also keeps source
+    document metadata so multi-document goldens remain traceable."""
+    if not LANGSMITH_AVAILABLE or not os.getenv("LANGSMITH_API_KEY"):
+        print("[LangSmith] Golden dataset upload skipped: LangSmith is not configured.")
+        return None
+
+    if not golden_items:
+        return None
+
+    try:
+        client = LangSmithClient()
+        conn = get_db_connection()
+        row = conn.execute(
+            "SELECT langsmith_dataset_id FROM sessions WHERE session_id = ?",
+            (session_id,)
+        ).fetchone()
+        conn.close()
+
+        dataset_id = row["langsmith_dataset_id"] if row and row["langsmith_dataset_id"] else None
+
+        if dataset_id:
+            # Regeneration in the same session replaces the previous golden
+            # examples while keeping the same LangSmith dataset for that session.
+            existing_examples = list(client.list_examples(dataset_id=dataset_id))
+            if existing_examples:
+                client.delete_examples(example_ids=[str(example.id) for example in existing_examples])
+        else:
+            dataset = client.create_dataset(
+                dataset_name=f"QA_Studio_Session_{session_id}",
+                description=f"DeepEval golden dataset for QA Studio session {session_id}."
+            )
+            dataset_id = str(dataset.id)
+
+        valid_items = [
+            item for item in golden_items
+            if item.get("question") and item.get("expected_output")
+        ]
+
+        if valid_items:
+            inputs = [{"question": item.get("question", "")} for item in valid_items]
+            outputs = [{"answer": item.get("expected_output", "")} for item in valid_items]
+            metadata = [
+                {
+                    "source_documents": item.get("source_documents", []),
+                    "source_pages": item.get("source_pages", []),
+                    "multi_document": len(item.get("source_documents", [])) > 1,
+                }
+                for item in valid_items
+            ]
+            client.create_examples(
+                dataset_id=dataset_id,
+                inputs=inputs,
+                outputs=outputs,
+                metadata=metadata,
+            )
+
+        conn = get_db_connection()
+        conn.execute(
+            "UPDATE sessions SET langsmith_dataset_id = ? WHERE session_id = ?",
+            (dataset_id, session_id)
+        )
+        conn.commit()
+        conn.close()
+
+        print(f"[LangSmith] Golden dataset saved for session {session_id}: {dataset_id}")
+        return dataset_id
+    except Exception as e:
+        # LangSmith must never break golden-dataset generation.
+        print(f"[LangSmith] Failed to save golden dataset for session {session_id}: {e}")
+        return None
+
+
 import fitz  # PyMuPDF
 import numpy as np
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from groq import Groq
@@ -143,11 +220,11 @@ groq_client = groq_pool.current_client()[0] if groq_pool else None
 DB_FILE = "qa_sessions.db"
 
 # Model Configuration
-GENERATION_MODEL = os.getenv("GENERATION_MODEL", "qwen/qwen3-32b")
-VISION_MODEL = os.getenv("VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")  # Groq multimodal model
+GENERATION_MODEL = os.getenv("GENERATION_MODEL", "openai/gpt-oss-120b")
+VISION_MODEL = os.getenv("VISION_MODEL", "qwen/qwen3.6-27b")  # Groq multimodal model
 GEVAL_JUDGE_MODEL = os.getenv("GEVAL_JUDGE_MODEL", "openai/gpt-oss-120b")
 RAG_JUDGE_MODEL = os.getenv("RAG_JUDGE_MODEL", "openai/gpt-oss-120b")
-SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL", "qwen/qwen3-32b")
+SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL", "openai/gpt-oss-120b")
 
 EVAL_CONCURRENCY_LIMIT = int(os.getenv("EVAL_CONCURRENCY", "3"))
 _eval_semaphore = asyncio.Semaphore(EVAL_CONCURRENCY_LIMIT)
@@ -242,7 +319,7 @@ _CHROMA_COLLECTION_LOCK = threading.Lock()
 
 # --- RAG Pipeline Config (from the "Models & Params" modal) ---
 class RAGConfigRequest(BaseModel):
-    chat_model: str = Field(default="llama-3.3-70b-versatile")
+    chat_model: str = Field(default="openai/gpt-oss-20b")
     embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL)
     chunk_size: int = Field(default=1000, ge=50, le=8000)
     chunk_overlap: int = Field(default=200, ge=0, le=4000)
@@ -279,6 +356,8 @@ def init_db():
         cursor.execute("ALTER TABLE sessions ADD COLUMN per_question_results TEXT")
     if "golden_dataset" not in existing_columns:
         cursor.execute("ALTER TABLE sessions ADD COLUMN golden_dataset TEXT")
+    if "langsmith_dataset_id" not in existing_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN langsmith_dataset_id TEXT")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,6 +395,177 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+
+def _ensure_documents_table():
+    """Creates the session-document table used for multi-document sessions."""
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS session_documents (
+            document_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            source_doc TEXT NOT NULL,
+            document_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_session_documents_session
+        ON session_documents(session_id)
+    """)
+    conn.commit()
+    conn.close()
+
+
+def _is_plans_document(filename: str) -> bool:
+    """Returns True for documents whose filename contains "Plans" (case-insensitive).
+
+    These documents are stored in the session for reference but are intentionally
+    excluded from extraction, generation, evaluation, RAG, and chat processing.
+    """
+    return "plans" in (filename or "").lower()
+
+
+def _get_processable_documents(documents: List[dict]) -> List[dict]:
+    """Returns only documents that participate in processing.
+
+    Documents whose filenames contain "Plans" are session-only documents and
+    must remain visible/stored without contributing content to any pipeline.
+    """
+    return [doc for doc in documents if not _is_plans_document(doc.get("filename", ""))]
+
+
+def _get_session_documents(session_id: str) -> List[dict]:
+    """Returns all documents currently belonging to a session."""
+    _ensure_documents_table()
+    conn = get_db_connection()
+    rows = conn.execute(
+        """SELECT document_id, session_id, filename, source_doc, document_hash, created_at
+           FROM session_documents WHERE session_id = ? ORDER BY created_at ASC, rowid ASC""",
+        (session_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def _ensure_legacy_document(session_id: str, row) -> List[dict]:
+    """Migrates the old single-document session representation into the new
+    session_documents table the first time a legacy session is accessed."""
+    _ensure_documents_table()
+    documents = _get_session_documents(session_id)
+    if documents or not (row["source_doc"] or "").strip():
+        return documents
+
+    source_doc = row["source_doc"] or ""
+    filename = row["filename"] or "document"
+    document_hash = _document_hash(source_doc)
+    document_id = str(uuid.uuid4())
+
+    conn = get_db_connection()
+    conn.execute(
+        """INSERT INTO session_documents
+           (document_id, session_id, filename, source_doc, document_hash)
+           VALUES (?, ?, ?, ?, ?)""",
+        (document_id, session_id, filename, source_doc, document_hash)
+    )
+    conn.commit()
+    conn.close()
+    return _get_session_documents(session_id)
+
+
+def _add_uploaded_document(session_id: str, filename: str, source_doc: str) -> Optional[dict]:
+    """Adds a document to the session unless the same document is already present.
+
+    Plans documents are stored as session-only documents with no extracted content.
+    All other documents retain the existing extracted-content behavior.
+    """
+    source_doc = (source_doc or "").strip()
+    stored_only = _is_plans_document(filename)
+    if not source_doc and not stored_only:
+        return None
+
+    _ensure_documents_table()
+    document_hash = _document_hash(source_doc) if source_doc else _document_hash(f"__PLANS_ONLY__::{(filename or 'document').lower()}")
+    conn = get_db_connection()
+    existing = conn.execute(
+        """SELECT document_id, session_id, filename, source_doc, document_hash, created_at
+           FROM session_documents WHERE session_id = ? AND document_hash = ? LIMIT 1""",
+        (session_id, document_hash)
+    ).fetchone()
+    if existing:
+        conn.close()
+        return dict(existing)
+
+    document_id = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO session_documents
+           (document_id, session_id, filename, source_doc, document_hash)
+           VALUES (?, ?, ?, ?, ?)""",
+        (document_id, session_id, filename or "document", source_doc, document_hash)
+    )
+    conn.commit()
+    row = conn.execute(
+        """SELECT document_id, session_id, filename, source_doc, document_hash, created_at
+           FROM session_documents WHERE document_id = ?""",
+        (document_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _combined_document_text(documents: List[dict]) -> str:
+    """Builds one clearly separated text representation for generation and RAG.
+    The vector store uses this combined representation only in the RAG path;
+    golden synthesis itself does not use a vector store."""
+    sections = []
+    for doc in documents:
+        sections.append(
+            f"[SOURCE DOCUMENT: {doc.get('filename', 'document')}]\n"
+            f"{doc.get('source_doc', '')}".strip()
+        )
+    return "\n\n==================== DOCUMENT SEPARATOR ====================\n\n".join(sections).strip()
+
+
+def _session_document_summary(documents: List[dict]) -> List[dict]:
+    return [
+        {
+            "document_id": d["document_id"],
+            "filename": d["filename"],
+            "created_at": d.get("created_at"),
+        }
+        for d in documents
+    ]
+
+
+def _source_metadata_from_context(context) -> tuple:
+    """Extracts document/page provenance from Synthesizer context strings."""
+    if isinstance(context, str):
+        context_parts = [context]
+    elif isinstance(context, list):
+        context_parts = [str(x) for x in context]
+    else:
+        context_parts = [str(context)] if context else []
+
+    sources = []
+    pages = []
+    source_pattern = re.compile(r"\[SOURCE DOCUMENT:\s*(.*?)\]")
+    page_pattern = re.compile(r"\[PAGE\s+(\d+)\]")
+
+    for part in context_parts:
+        for match in source_pattern.findall(part):
+            name = match.strip()
+            if name and name not in sources:
+                sources.append(name)
+        for match in page_pattern.findall(part):
+            page = int(match)
+            if page not in pages:
+                pages.append(page)
+
+    return sources, pages
+
+_ensure_documents_table()
+
 TEST_CASE_DEPTH_INSTRUCTIONS = {
     10: (
         "Generate exactly 10 test cases covering ONLY the primary, explicitly "
@@ -350,6 +600,806 @@ SYNTHESIS_EVOLUTION_CONFIG = {
         Evolution.COMPARATIVE: 0.25, Evolution.HYPOTHETICAL: 0.25
     }),
 }
+
+# ─── Genesis Capital Field-Targeted QA Generation ────────────────────────────
+#
+# 32 testable fields derived from the Genesis Feasibility Review Template.
+# The 7 pure user-input fields are excluded (Project Status, Report Created by,
+# appropriate/not appropriate timeline, Draw Hold, Specify Draw Hold Items,
+# Other Special Conditions, Permits Post Funding).
+#
+# Format rules (matching Genesis extract_fields.py conventions):
+#   currency  → $#,###,###.## via _format_money()
+#   date      → stored as YYYY-MM-DD (ISO), displayed as MM/DD/YYYY
+#   percent   → XX.X%
+#   GFA       → "41,656 SF"
+#   timeline  → "X days (Y months)"
+#   dropdown  → exact option string from the options list
+
+GENESIS_FIELDS: List[dict] = [
+    # ── Report Header ──────────────────────────────────────────────────────────
+    {
+        "field_name": "Date of Report Approved",
+        "section": "Report Header",
+        "type": "date",
+        "source": "Auto-generated",
+        "extraction_method": "deterministic",
+        "expected_doc": None,
+        "options": None,
+        "format_hint": "ISO date YYYY-MM-DD stored internally; displayed as MM/DD/YYYY. Always equals today's date.",
+        "question_template": "What should the 'Date of Report Approved' field display on a Genesis Capital feasibility review report generated today?",
+    },
+    {
+        "field_name": "Project Address / Title",
+        "section": "Report Header",
+        "type": "freeform",
+        "source": "Trinity Report cover page",
+        "extraction_method": "RAG + LLM + Regex text scan",
+        "expected_doc": "Trinity",
+        "options": None,
+        "format_hint": "Full street address including city, state, zip. Prepend project development name before address if present. Strip deal/loan IDs.",
+        "question_template": "What is the full project address and title for this Genesis Capital feasibility review?",
+    },
+    {
+        "field_name": "Sponsor",
+        "section": "Report Header",
+        "type": "freeform",
+        "source": "SCA (Sponsor Construction Analysis)",
+        "extraction_method": "RAG + LLM (company entity name only)",
+        "expected_doc": "SCA",
+        "options": None,
+        "format_hint": "Full legal company/entity name including fka/dba/aka. Must NOT be an individual person's name.",
+        "question_template": "Who is the sponsor (development company or legal entity) for this project according to the SCA document?",
+    },
+    {
+        "field_name": "Borrower Entity",
+        "section": "Report Header",
+        "type": "freeform",
+        "source": "Construction Budget / Trinity / SCA",
+        "extraction_method": "RAG + LLM (header row scan)",
+        "expected_doc": "Budget",
+        "options": None,
+        "format_hint": "Legal LLC/entity name executing the loan. No timestamps, dates, or individual names.",
+        "question_template": "What is the borrower entity (legal LLC or company name) for this project?",
+    },
+    # ── Executive Summary ──────────────────────────────────────────────────────
+    {
+        "field_name": "Additional Comments",
+        "section": "Executive Summary",
+        "type": "narrative",
+        "source": "SCA (Sponsor Construction Analysis)",
+        "extraction_method": "RAG + LLM narrative synthesis (zero-hallucination)",
+        "expected_doc": "SCA",
+        "options": None,
+        "format_hint": "2–3 paragraph narrative: sponsor track record, experience, construction approval tier, team evaluation. Plain text only, no markdown headers or bullets. Ends with: 'This report is for the [Project Type] of a [No. of Stories] [Property Type] with [No. of Units] Units totaling approximately [GFA] gross square feet.'",
+        "question_template": "Based on the SCA document, what should be written in the 'Additional Comments' narrative for the executive summary of this feasibility review?",
+    },
+    {
+        "field_name": "Third-Party Review",
+        "section": "Executive Summary",
+        "type": "dropdown",
+        "source": "Trinity Report",
+        "extraction_method": "RAG + LLM + dropdown validation",
+        "expected_doc": "Trinity",
+        "options": ["None", "feasibility", "budget review"],
+        "format_hint": "Select 'feasibility' if plans, budget, and scope were reviewed together. Select 'budget review' if only budget was reviewed without drawings/plans.",
+        "question_template": "What type of third-party review was obtained for this project — 'None', 'feasibility', or 'budget review'?",
+    },
+    {
+        "field_name": "Third-Party Reviewer",
+        "section": "Executive Summary",
+        "type": "dropdown",
+        "source": "Trinity Report",
+        "extraction_method": "RAG + LLM + dropdown validation",
+        "expected_doc": "Trinity",
+        "options": ["Trinity", "Granite", "DCMI", "Northwest Monitoring"],
+        "format_hint": "Must be exactly one of the 4 approved firms: Trinity, Granite, DCMI, Northwest Monitoring.",
+        "question_template": "Which third-party company authored the feasibility review report for this project?",
+    },
+    {
+        "field_name": "Third-party Review (Good/Bad)",
+        "section": "Executive Summary",
+        "type": "dropdown",
+        "source": "Trinity Report page 1",
+        "extraction_method": "RAG + LLM + dropdown validation",
+        "expected_doc": "Trinity",
+        "options": ["appropriate", "not appropriate"],
+        "format_hint": "Select 'appropriate' if the report states cost is reasonable for the proposed scope. Select 'not appropriate' if risk or cost is flagged negatively.",
+        "question_template": "Does the third-party reviewer consider the overall project cost and risk 'appropriate' or 'not appropriate' for the proposed scope?",
+    },
+    {
+        "field_name": "Third-Party Review (Meet or Fail)",
+        "section": "Executive Summary",
+        "type": "dropdown",
+        "source": "Trinity Report",
+        "extraction_method": "RAG + LLM + Regex text scan",
+        "expected_doc": "Trinity",
+        "options": [
+            "meets best practice and is Recommended for Approval",
+            "meets best practice with Advisement or Conditions Recommended for Approval",
+            "does not meet best practice and should Not be Approved",
+        ],
+        "format_hint": "Must be one of the 3 exact strings. Map approval language to option 1, conditional approval to option 2, rejection to option 3.",
+        "question_template": "What is the third-party reviewer's formal best-practice recommendation for this project?",
+    },
+    {
+        "field_name": "Genesis Agree (Y/N)",
+        "section": "Executive Summary",
+        "type": "dropdown",
+        "source": "Trinity Report (derived from Meet or Fail)",
+        "extraction_method": "Derived: agrees if Meet/Fail is options 1 or 2; disagree if option 3",
+        "expected_doc": "Trinity",
+        "options": ["agrees", "disagree"],
+        "format_hint": "Defaults to 'agrees' unless the third-party review is a clear rejection (does not meet best practice). Derived automatically from Third-Party Review (Meet or Fail).",
+        "question_template": "Does Genesis Capital Construction Department agree with the third-party findings for this project?",
+    },
+    {
+        "field_name": "Project Timeline To Date",
+        "section": "Executive Summary",
+        "type": "freeform",
+        "source": "Construction Timeline / Deal Notes",
+        "extraction_method": "Scoped date regex + days/months calculation",
+        "expected_doc": "Timeline",
+        "options": None,
+        "format_hint": "Format: 'X days (Y months)' elapsed from project start date to today. Returns 'Project has not started yet' if start date is in the future.",
+        "question_template": "How much time has elapsed since this project started, expressed in days and months?",
+    },
+    {
+        "field_name": "Remaining Timeline",
+        "section": "Executive Summary",
+        "type": "freeform",
+        "source": "Construction Timeline / Deal Notes",
+        "extraction_method": "Scoped date regex + days/months calculation",
+        "expected_doc": "Timeline",
+        "options": None,
+        "format_hint": "Format: 'X days (Y months)' remaining until final completion/Certificate of Occupancy. Returns 'Project timeline has passed' if end date is in the past.",
+        "question_template": "How much time remains until this project's final completion or Certificate of Occupancy?",
+    },
+    # ── Loan Summary ───────────────────────────────────────────────────────────
+    {
+        "field_name": "Project Type",
+        "section": "Loan Summary",
+        "type": "dropdown",
+        "source": "Trinity Report",
+        "extraction_method": "RAG + LLM + Regex text scan",
+        "expected_doc": "Trinity",
+        "options": [
+            "Renovation",
+            "Ground - Up Construction",
+            "Renovation plus square footage",
+            "Mid - Construction Refinance of a Renovation",
+            "Mid - Construction Refinance of a Ground - Up Construction",
+            "Horizontal Site Work Only",
+        ],
+        "format_hint": "'New construction'/'ground up'/'new build' → 'Ground - Up Construction'. 'Renovation'/'rehab'/'remodel' → 'Renovation'. 'Adding square footage' → 'Renovation plus square footage'.",
+        "question_template": "What is the project type classification for this Genesis Capital feasibility review (e.g. Renovation, Ground - Up Construction)?",
+    },
+    {
+        "field_name": "Rehab Amount",
+        "section": "Loan Summary",
+        "type": "freeform",
+        "source": "Construction Budget (.xlsx)",
+        "extraction_method": "Excel TOTAL row scan + currency formatting",
+        "expected_doc": "Budget",
+        "options": None,
+        "format_hint": "Total construction budget. Format: $#,###,###.## (e.g. $4,250,000.00). Must be >= Construction Holdback Amount.",
+        "question_template": "What is the total rehab/construction budget amount for this project?",
+    },
+    {
+        "field_name": "Construction Holdback Amount",
+        "section": "Loan Summary",
+        "type": "freeform",
+        "source": "Construction Budget (.xlsx)",
+        "extraction_method": "Excel TOTAL/holdback row scan + currency formatting",
+        "expected_doc": "Budget",
+        "options": None,
+        "format_hint": "Total loan holdback for construction draws. Format: $#,###,###.## Must be <= Rehab Amount and >= 1% of Rehab.",
+        "question_template": "What is the construction holdback amount (loan proceeds allocated for construction draws) for this project?",
+    },
+    {
+        "field_name": "Project Cost per Square Foot",
+        "section": "Loan Summary",
+        "type": "calculated",
+        "source": "Calculated: Rehab Amount / Gross Buildable Square Footage (GFA)",
+        "extraction_method": "Formula: Rehab Amount ÷ GFA",
+        "expected_doc": None,
+        "options": None,
+        "format_hint": "Format: $#,###,###.## (e.g. $245.50). Recalculates live when Rehab Amount or GFA changes.",
+        "question_template": "What is the project cost per square foot, calculated as Rehab Amount divided by Gross Buildable Square Footage?",
+    },
+    {
+        "field_name": "Cost per Structure",
+        "section": "Loan Summary",
+        "type": "calculated",
+        "source": "Calculated: Rehab Amount / No. of Structures",
+        "extraction_method": "Formula: Rehab Amount ÷ No. of Structures",
+        "expected_doc": None,
+        "options": None,
+        "format_hint": "Format: $#,###,###.## Left empty if No. of Structures is not populated.",
+        "question_template": "What is the cost per structure, calculated as Rehab Amount divided by the number of structures?",
+    },
+    {
+        "field_name": "Cost per Unit",
+        "section": "Loan Summary",
+        "type": "calculated",
+        "source": "Calculated: Rehab Amount / No. of Units",
+        "extraction_method": "Formula: Rehab Amount ÷ No. of Units",
+        "expected_doc": None,
+        "options": None,
+        "format_hint": "Format: $#,###,###.## (e.g. $156,250.00). Recalculates live when Rehab Amount or No. of Units changes.",
+        "question_template": "What is the cost per unit, calculated as Rehab Amount divided by the number of residential units?",
+    },
+    {
+        "field_name": "Contingency Amount",
+        "section": "Loan Summary",
+        "type": "freeform",
+        "source": "Construction Budget / Trinity Report",
+        "extraction_method": "Budget summary row scan → line items sum → Trinity text scan → LLM extraction",
+        "expected_doc": "Budget",
+        "options": None,
+        "format_hint": "Total contingency reserve in dollars. Format: $#,###,###.## Sourced from 'Total Contingency Included | $X | Y%' summary row in budget spreadsheet.",
+        "question_template": "What is the total contingency amount allocated in the construction budget for this project?",
+    },
+    {
+        "field_name": "Contingency (%)",
+        "section": "Loan Summary",
+        "type": "calculated",
+        "source": "Calculated: Contingency Amount / (Construction Holdback - Contingency Amount)",
+        "extraction_method": "Stated % from budget row (confidence 0.95) or formula fallback",
+        "expected_doc": None,
+        "options": None,
+        "format_hint": "Format: XX.X% (e.g. 7.5%). Formula: (Contingency Amount / (Construction Holdback - Contingency Amount)) × 100.",
+        "question_template": "What is the contingency percentage relative to the net construction holdback for this project?",
+    },
+    {
+        "field_name": "Project Complete Percentage",
+        "section": "Loan Summary",
+        "type": "calculated",
+        "source": "Calculated: (today - start_date) / (end_date - start_date)",
+        "extraction_method": "Formula: elapsed timeline / total timeline × 100",
+        "expected_doc": None,
+        "options": None,
+        "format_hint": "Format: XX.X% (e.g. 42.5%). Returns 0.0% if project not started, 100.0% if past end date.",
+        "question_template": "What percentage of the construction timeline has been completed as of today, based on start and end dates?",
+    },
+    {
+        "field_name": "Budget Review",
+        "section": "Loan Summary",
+        "type": "dropdown",
+        "source": "Trinity Report page 1",
+        "extraction_method": "RAG + LLM + dropdown validation",
+        "expected_doc": "Trinity",
+        "options": [
+            "The budget presented accurately reflects the scope of the project and the cost allocations have been determined to meet the minimum threshold to complete",
+            'The budget is considered to be a higher than typical "cost per square foot", but it is acceptable',
+            "The budget presented accurately reflects the scope of the project and the cost allocations have been determined to meet the minimum threshold to complete. However, certain line items require further review",
+        ],
+        "format_hint": "Must be one of the 3 exact standardized reviewer statements about budget adequacy.",
+        "question_template": "What is the budget review determination for this project — does it accurately reflect the scope and meet the minimum threshold to complete?",
+    },
+    {
+        "field_name": "Additional Budget Comments",
+        "section": "Loan Summary",
+        "type": "narrative",
+        "source": "Trinity Report",
+        "extraction_method": "RAG + LLM (max 2 lines, specific dollar amounts, plain text)",
+        "expected_doc": "Trinity",
+        "options": None,
+        "format_hint": "1–2 sentence narrative: overall budget adequacy, $/SF market comparison, flagged line items. Plain text only.",
+        "question_template": "What additional budget comments does the third-party report provide about the construction budget adequacy and cost per square foot?",
+    },
+    {
+        "field_name": "Plan Status",
+        "section": "Loan Summary",
+        "type": "dropdown",
+        "source": "Trinity Report / Plans",
+        "extraction_method": "RAG + LLM + Regex text scan",
+        "expected_doc": "Trinity",
+        "options": [
+            "Pre - Submittal",
+            "Submittal/Plan Check (PC)",
+            "RTI",
+            "City approved",
+            "Not Required",
+        ],
+        "format_hint": "Explicit approval language/stamps → 'City approved'. Submittal dates → 'Submittal/Plan Check (PC)'. RTI stamp → 'RTI'.",
+        "question_template": "What is the architectural and engineering plan review/approval status with the municipal building department for this project?",
+    },
+    {
+        "field_name": "Plan Review Status",
+        "section": "Loan Summary",
+        "type": "dropdown",
+        "source": "Trinity Report / Plans",
+        "extraction_method": "Key drawing sets check (Civil, Structural, Architectural) + Regex scan",
+        "expected_doc": "Trinity",
+        "options": [
+            "The plans received are sufficient to support the project scope as needed",
+            "Supplemental plan documentation is needed",
+            "N/A",
+        ],
+        "format_hint": "Civil + Structural + Architectural all provided without defects → option 1. Key sets missing or major deficiencies → option 2. No plans provided → 'N/A'.",
+        "question_template": "Are the drawing sets provided sufficient to support the construction scope, or is supplemental plan documentation needed?",
+    },
+    {
+        "field_name": "Permit Status",
+        "section": "Loan Summary",
+        "type": "user_input",
+        "source": "Trinity Report / Deal Notes",
+        "extraction_method": "LLM + anti-hallucination text scan gate",
+        "expected_doc": "Trinity",
+        "options": [
+            "Building permits have been issued prior to funding this loan. The Construction Department has received all necessary building permits",
+            'The borrower has applied for building permits and they are currently "RTI" Ready-To-Issue.',
+            "The borrower has been issued partial permits on this project. Permits are expected to be issued.",
+            "The borrower has not yet obtained permits for this loan",
+            "There will not be permits issued/required on this loan",
+        ],
+        "format_hint": "Must match one of the 5 exact permit status strings. LLM is prevented from claiming permits issued unless Trinity text explicitly confirms it.",
+        "question_template": "What is the current building permit status for this project at the time of loan review?",
+    },
+    # ── Finished Product Details ───────────────────────────────────────────────
+    {
+        "field_name": "Property Type",
+        "section": "Finished Product Details",
+        "type": "dropdown",
+        "source": "Trinity Report page 1 para 5-6",
+        "extraction_method": "RAG + LLM + Trinity text scan",
+        "expected_doc": "Trinity",
+        "options": [
+            "Single - Family Home",
+            "Single - Family Home plus ADU",
+            "Multifamily Building",
+            "Multi Unit",
+            "Multi Unit (duplexes) buildings",
+            "Planned Urban Development (PUD)",
+            "Horizontal Land Improvements",
+            "Subdivision",
+        ],
+        "format_hint": "townhome/condo/apartment/hotel → 'Multifamily Building'. duplex → 'Multi Unit (duplexes) buildings'. single family → 'Single - Family Home'.",
+        "question_template": "What is the property type classification of the completed project (e.g. Multifamily Building, Single - Family Home)?",
+    },
+    {
+        "field_name": "Region",
+        "section": "Finished Product Details",
+        "type": "freeform",
+        "source": "Trinity Report cover page",
+        "extraction_method": "RAG + LLM + Regex text scan",
+        "expected_doc": "Trinity",
+        "options": None,
+        "format_hint": "City and state where property is located (e.g. 'Richmond Heights, OH').",
+        "question_template": "What is the geographic region (city and state) where this project is located?",
+    },
+    {
+        "field_name": "No. of Units",
+        "section": "Finished Product Details",
+        "type": "dropdown",
+        "source": "Trinity Report",
+        "extraction_method": "Dedicated full-text LLM + Budget Cost/Unit header scan + Regex",
+        "expected_doc": "Trinity",
+        "options": ["SFR", "SFR + ADU", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+                    "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
+                    "21", "22", "23", "24", "25"],
+        "format_hint": "Integer count of residential dwelling units. Custom values above 25 accepted as strings.",
+        "question_template": "What is the total number of residential dwelling units in this project?",
+    },
+    {
+        "field_name": "No. of Stories",
+        "section": "Finished Product Details",
+        "type": "dropdown",
+        "source": "Trinity Report",
+        "extraction_method": "Dedicated full-text LLM + Regex scan",
+        "expected_doc": "Trinity",
+        "options": [
+            "One - story", "two - story", "three - story", "four - story",
+            "five - story", "six - story", "seven - story", "eight - story",
+            "nine - story", "ten - story",
+            "11 - story", "12 - story", "13 - story", "14 - story", "15 - story",
+        ],
+        "format_hint": "Above-grade floors only. Excludes basements, parking garages, underground levels.",
+        "question_template": "How many above-grade stories does the primary building have in this project?",
+    },
+    {
+        "field_name": "No. of Structures",
+        "section": "Finished Product Details",
+        "type": "freeform",
+        "source": "Trinity Report",
+        "extraction_method": "Budget/Trinity Cost/Structure header scan + Full-text LLM + Regex + BTR logic",
+        "expected_doc": "Trinity",
+        "options": None,
+        "format_hint": "Integer count of physical buildings including amenity structures (Clubhouse, Grill House, Pool House). Excludes detached garages, carports, leasing offices.",
+        "question_template": "What is the total number of physical building structures in this project, including amenity buildings?",
+    },
+    {
+        "field_name": "Gross Buildable Square Footage (GFA)",
+        "section": "Finished Product Details",
+        "type": "freeform",
+        "source": "Trinity Report / Plans / Budget",
+        "extraction_method": "RAG + LLM + Regex scan + SF format",
+        "expected_doc": "Trinity",
+        "options": None,
+        "format_hint": "Total cumulative gross building floor area across all structures. Format: '41,656 SF' (with SF suffix, comma-formatted).",
+        "question_template": "What is the total gross buildable square footage (GFA) across all structures in this project?",
+    },
+]
+
+# Fields excluded from GENESIS_FIELDS (pure user input — no document answer exists):
+# 1.5  Project Status          (analyst decision dropdown)
+# 1.6  Report Created by       (analyst name dropdown)
+# 2.9  appropriate/not appropriate timeline  (analyst judgment)
+# 2.10 Draw Hold               (analyst decision)
+# 2.11 Specify Draw Hold Items (analyst checklist)
+# 2.12 Other Special Conditions (analyst freeform)
+# 3.15 Permits (Post Funding)  (analyst deadline dropdown)
+
+_GENESIS_FIELD_NAMES = {f["field_name"] for f in GENESIS_FIELDS}
+
+
+async def generate_genesis_field_goldens(
+    documents: List[dict],
+    sample_json: str,
+    field_count: int = 32,
+) -> tuple[List[dict], dict]:
+    """Generate golden QA pairs for a random sample of Genesis fields.
+
+    field_count controls how many of the 32 testable fields to include:
+    - The date field (Date of Report Approved) is always included.
+    - The remaining slots are filled by random sampling from the other fields.
+    - field_count=32 means all fields (no sampling).
+
+    Uses parallel LLM calls grouped by source document.
+    """
+    import random
+    from datetime import date as _date
+
+    # ── Sample fields ─────────────────────────────────────────────────────────
+    date_fields = [f for f in GENESIS_FIELDS if f["type"] == "date"]
+    other_fields = [f for f in GENESIS_FIELDS if f["type"] != "date"]
+
+    if field_count >= len(GENESIS_FIELDS):
+        # All fields — no sampling
+        active_fields = GENESIS_FIELDS
+    else:
+        # Always include the date field; randomly sample the rest
+        remaining_slots = max(field_count - len(date_fields), 0)
+        sampled = random.sample(other_fields, min(remaining_slots, len(other_fields)))
+        # Keep original GENESIS_FIELDS order for consistent display
+        sampled_names = {f["field_name"] for f in sampled} | {f["field_name"] for f in date_fields}
+        active_fields = [f for f in GENESIS_FIELDS if f["field_name"] in sampled_names]
+
+    print(f"[Genesis QA] Sampling {len(active_fields)}/{len(GENESIS_FIELDS)} fields")
+
+    doc_text = _combined_document_text(documents)
+    today_display = _date.today().strftime("%m/%d/%Y")
+    source_doc_names = [d["filename"] for d in documents]
+
+    import re as _re
+
+    def _extract_text_only(text: str) -> str:
+        """Extract only the --- EXTRACTED TEXT --- sections, discarding all
+        visual descriptions and think blocks regardless of nesting."""
+        sections = re.findall(
+            r'--- EXTRACTED TEXT ---\s*(.*?)(?=--- EXTRACTED TEXT ---|--- VISUAL & DIAGRAM DESCRIPTION ---|$)',
+            text, flags=_re.DOTALL
+        )
+        if not sections:
+            # Fallback: strip think blocks the old way
+            text = _re.sub(r'<think>.*?</think>', '', text, flags=_re.DOTALL)
+            text = _re.sub(r'<think>.*$', '', text, flags=_re.DOTALL)
+            return _re.sub(r'\n{3,}', '\n\n', text).strip()
+        combined = '\n\n'.join(s.strip() for s in sections if s.strip())
+        return _re.sub(r'\n{3,}', '\n\n', combined).strip()
+
+    # Use _extract_text_only instead of strip_think for all documents
+    _strip_think_blocks = _extract_text_only
+
+    # Build clean per-document text, skipping binary files
+    doc_text_by_label: dict = {}  # label -> full clean text
+    for doc in documents:
+        fname = doc.get("filename", "").lower()
+        raw = doc.get("source_doc", "") or ""
+        if not raw.strip() or raw.strip().startswith("PK") or "\x00" in raw[:100]:
+            continue
+        clean = _strip_think_blocks(raw)
+        if not clean.strip():
+            continue
+        if any(k in fname for k in ["feasibility", "trinity", "feasibility report"]):
+            doc_text_by_label["trinity"] = doc_text_by_label.get("trinity", "") + "\n\n" + clean
+        if any(k in fname for k in ["sca", "sponsor", "borrower construction due diligence", "track record"]):
+            doc_text_by_label["sca"] = doc_text_by_label.get("sca", "") + "\n\n" + clean
+        if any(k in fname for k in ["timeline", "schedule", "gantt"]):
+            doc_text_by_label["timeline"] = doc_text_by_label.get("timeline", "") + "\n\n" + clean
+        if any(k in fname for k in ["deal notes", "deal_notes", "loan notes"]):
+            doc_text_by_label["deal_notes"] = doc_text_by_label.get("deal_notes", "") + "\n\n" + clean
+
+    # Everything except binary budget xlsx
+    combined_clean = "\n\n".join(v.strip() for v in doc_text_by_label.values() if v.strip())
+    if not combined_clean:
+        combined_clean = _strip_think_blocks(doc_text)
+
+    print(f"[Genesis QA] Clean text ready: {len(combined_clean):,} chars | docs: {list(doc_text_by_label.keys())}")
+
+    # ── Map each field to its source document text ───────────────────────────
+    label_map = {
+        "Trinity":    "trinity",
+        "Budget":     "trinity",   # budget table is inside the Feasibility Report
+        "SCA":        "sca",
+        "Timeline":   "timeline",
+        "Deal Notes": "deal_notes",
+    }
+
+    def _context_for_field(field: dict, max_chars: int = 8000) -> str:
+        label = label_map.get(field.get("expected_doc", ""), None)
+        source = (doc_text_by_label.get(label, "") if label else combined_clean).strip()
+        if not source:
+            source = combined_clean
+        return source[:max_chars]
+
+    system_prompt = (
+        "You are a precise data extraction assistant for Genesis Capital feasibility reviews.\n"
+        "You will receive a batch of fields to extract from the provided document context.\n"
+        "Documents may include: Trinity Reports (feasibility reviews with budget tables), "
+        "SCA (Sponsor Construction Analysis), Construction Timelines, and Deal Notes.\n\n"
+        "STRICT RULES:\n"
+        "1. Extract ONLY from the provided context. Never fabricate data.\n"
+        "2. If a field is not found in the context, use exactly: NOT_FOUND\n"
+        "3. Currency format: $#,###,###.## (e.g. $4,250,000.00)\n"
+        "4. Date format: MM/DD/YYYY (e.g. 08/27/2026)\n"
+        "5. Percentage format: XX.X% (e.g. 7.5%)\n"
+        "6. GFA format: number with SF suffix (e.g. 41,656 SF)\n"
+        "7. Timeline format: X days (Y months)\n"
+        "8. For dropdown fields, return ONLY one of the exact option strings listed.\n"
+        "9. For calculated fields, find the input values in the context, compute, and show "
+        "   the formula + result (e.g. '$9,649,588.08 / 20,868 SF = $462.41').\n"
+        "10. Return a JSON object: each key = exact field_name, each value = extracted string."
+    )
+
+    # ── Group fields by their source document label ──────────────────────────
+    groups: dict = {}
+    formula_fields = []
+    for f in active_fields:
+        if f["type"] == "date":
+            continue
+        if f["type"] == "calculated":
+            formula_fields.append(f)
+            continue
+        lbl = label_map.get(f.get("expected_doc", ""), "combined")
+        groups.setdefault(lbl, []).append(f)
+
+    # For each group, build (context_slice, fields) pairs.
+    # If the doc is longer than MAX_CHARS, split into 3 equal parts and send
+    # ALL fields against each part — best-answer-wins after.
+    # All parts run in PARALLEL so total time = 1 LLM call latency, not N×latency.
+    MAX_CHARS = 8000
+    MAX_FIELDS = 10
+    batches: List[tuple] = []  # (context_text, fields_list)
+
+    for lbl, fields in groups.items():
+        src = (doc_text_by_label.get(lbl, combined_clean) if lbl != "combined" else combined_clean).strip() or combined_clean
+        if len(src) <= MAX_CHARS:
+            for i in range(0, len(fields), MAX_FIELDS):
+                batches.append((src, fields[i:i + MAX_FIELDS]))
+        else:
+            # Split into 3 equal non-overlapping parts
+            part_size = len(src) // 3
+            parts = [src[:part_size], src[part_size:2*part_size], src[2*part_size:]]
+            for part in parts:
+                for i in range(0, len(fields), MAX_FIELDS):
+                    batches.append((part, fields[i:i + MAX_FIELDS]))
+
+    print(f"[Genesis QA] {len(batches)} parallel LLM calls + {len(formula_fields)} Python formula fields")
+
+    async def _run_batch(batch_idx: int, ctx: str, batch: List[dict]) -> dict:
+        field_descriptors = []
+        for f in batch:
+            desc = (f"FIELD: {f['field_name']}\n"
+                    f"  TYPE: {f['type']}\n"
+                    f"  SOURCE DOC: {f.get('expected_doc', 'any')}\n"
+                    f"  FORMAT: {f['format_hint']}")
+            if f.get("options"):
+                desc += "\n  ALLOWED OPTIONS (pick exactly one): " + " | ".join(f["options"])
+            field_descriptors.append(desc)
+        fields_block = "\n\n".join(field_descriptors)
+        user_prompt = (
+            f"DOCUMENT CONTEXT:\n{ctx}\n\n"
+            f"FIELDS TO EXTRACT:\n\n{fields_block}\n\n"
+            "Return a JSON object: key = exact field_name, value = extracted answer string.\n"
+            "Unknown fields: value = \"NOT_FOUND\"."
+        )
+        for attempt in range(3):
+            try:
+                limiter = get_rate_limiter(GENERATION_MODEL)
+                limiter.acquire(estimate_tokens(system_prompt, user_prompt))
+                response = await asyncio.to_thread(
+                    generate_content_with_key_rotation,
+                    GENERATION_MODEL,
+                    user_prompt,
+                    {"temperature": 0.0, "system_instruction": system_prompt,
+                     "response_format": {"type": "json_object"}},
+                )
+                result = json.loads(response.choices[0].message.content.strip())
+                found = sum(1 for v in result.values() if v != "NOT_FOUND")
+                print(f"[Genesis QA] Batch {batch_idx+1} done: {found}/{len(batch)} found")
+                return result
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < 2:
+                    await asyncio.sleep(3 * (attempt + 1))
+                    continue
+                print(f"[Genesis QA] Batch {batch_idx+1} failed: {e}")
+                return {f["field_name"]: "NOT_FOUND" for f in batch}
+        return {f["field_name"]: "NOT_FOUND" for f in batch}
+
+    # Run all batches in parallel
+    tasks = [_run_batch(i, ctx, batch) for i, (ctx, batch) in enumerate(batches)]
+    results = await asyncio.gather(*tasks)
+
+    # Best-answer-wins merge
+    extracted_values: dict = {}
+    for batch_result in results:
+        for k, v in batch_result.items():
+            if v and v != "NOT_FOUND":
+                extracted_values[k] = v
+            elif k not in extracted_values:
+                extracted_values[k] = v
+
+    # ── Compute formula fields in Python using extracted base values ─────────
+    def _parse_money(s: str) -> Optional[float]:
+        if not s or s == "NOT_FOUND":
+            return None
+        try:
+            return float(_re.sub(r"[^\d.]", "", s))
+        except (ValueError, TypeError):
+            return None
+
+    def _parse_sf(s: str) -> Optional[float]:
+        if not s or s == "NOT_FOUND":
+            return None
+        try:
+            return float(_re.sub(r"[^\d.]", "", s.replace(",", "")))
+        except (ValueError, TypeError):
+            return None
+
+    def _parse_int(s: str) -> Optional[float]:
+        if not s or s == "NOT_FOUND":
+            return None
+        try:
+            return float(_re.sub(r"[^\d.]", "", s))
+        except (ValueError, TypeError):
+            return None
+
+    def _fmt_money(v: float) -> str:
+        return f"${v:,.2f}"
+
+    def _fmt_pct(v: float) -> str:
+        return f"{v:.1f}%"
+
+    from datetime import date as _date2
+
+    rehab     = _parse_money(extracted_values.get("Rehab Amount", "NOT_FOUND"))
+    holdback  = _parse_money(extracted_values.get("Construction Holdback Amount", "NOT_FOUND"))
+    gfa       = _parse_sf(extracted_values.get("Gross Buildable Square Footage (GFA)", "NOT_FOUND"))
+    units     = _parse_int(extracted_values.get("No. of Units", "NOT_FOUND"))
+    structures= _parse_int(extracted_values.get("No. of Structures", "NOT_FOUND"))
+    contingency = _parse_money(extracted_values.get("Contingency Amount", "NOT_FOUND"))
+
+    # Project Complete % from timeline
+    start_str = extracted_values.get("Project Timeline To Date", "NOT_FOUND")
+    end_str   = extracted_values.get("Remaining Timeline", "NOT_FOUND")
+    today_d   = _date2.today()
+
+    for f in formula_fields:
+        fname = f["field_name"]
+        result = "NOT_FOUND"
+
+        if fname == "Project Cost per Square Foot":
+            if rehab and gfa:
+                val = rehab / gfa
+                result = f"{_fmt_money(rehab)} / {gfa:,.0f} SF = {_fmt_money(val)}"
+            elif rehab and not gfa:
+                result = "NOT_FOUND (GFA not extracted)"
+
+        elif fname == "Cost per Structure":
+            if rehab and structures:
+                val = rehab / structures
+                result = f"{_fmt_money(rehab)} / {structures:.0f} structures = {_fmt_money(val)}"
+
+        elif fname == "Cost per Unit":
+            if rehab and units:
+                val = rehab / units
+                result = f"{_fmt_money(rehab)} / {units:.0f} units = {_fmt_money(val)}"
+
+        elif fname == "Contingency (%)":
+            if contingency and holdback and holdback > contingency:
+                pct = contingency / (holdback - contingency) * 100
+                result = f"{_fmt_money(contingency)} / ({_fmt_money(holdback)} - {_fmt_money(contingency)}) = {_fmt_pct(pct)}"
+            elif contingency and rehab and rehab > contingency:
+                # Fallback: use rehab as denominator if holdback unknown
+                pct = contingency / rehab * 100
+                result = f"{_fmt_money(contingency)} / {_fmt_money(rehab)} = {_fmt_pct(pct)} (holdback not found, used rehab)"
+
+        elif fname == "Project Complete Percentage":
+            # Extract days-elapsed from Project Timeline To Date field
+            # Expected format: "392 days (13.1 months)"
+            days_match = _re.search(r"(\d+)\s*days", start_str or "")
+            rem_match  = _re.search(r"(\d+)\s*days", end_str or "")
+            if days_match and rem_match:
+                elapsed = int(days_match.group(1))
+                remaining = int(rem_match.group(1))
+                total = elapsed + remaining
+                if total > 0:
+                    pct = elapsed / total * 100
+                    result = f"{elapsed} / ({elapsed} + {remaining}) = {_fmt_pct(pct)}"
+            else:
+                result = "NOT_FOUND (timeline dates not extracted)"
+
+        extracted_values[fname] = result
+
+    # ── Assemble golden_items in original active_fields order ──────────────
+    golden_items: List[dict] = []
+    for field in active_fields:
+        field_name = field["field_name"]
+        if field["type"] == "date":
+            value = today_display
+            method = "auto-generated (date.today())"
+        else:
+            value = extracted_values.get(field_name, "NOT_FOUND")
+            method = field.get("extraction_method", "")
+
+        golden_items.append({
+            "question": field["question_template"],
+            "expected_output": value,
+            "field_name": field_name,
+            "section": field["section"],
+            "type": field["type"],
+            "source": field.get("source", ""),
+            "source_documents": source_doc_names,
+            "extraction_method": method,
+        })
+
+    # ── Build generated_json (respects sample_json schema if provided) ───────
+    slim_items = [
+        {
+            "field_name": g["field_name"],
+            "section": g["section"],
+            "type": g["type"],
+            "question": g["question"],
+            "expected_output": g["expected_output"],
+            "source": g["source"],
+            "extraction_method": g["extraction_method"],
+        }
+        for g in golden_items
+    ]
+
+    if sample_json and sample_json.strip() not in ("{}", ""):
+        format_system = (
+            "You are a QA schema formatter. Reformat each Genesis field result into the target JSON schema. "
+            "Do not invent facts, drop items, or add extra items. Preserve field names, questions, and expected outputs exactly."
+        )
+        format_prompt = (
+            f"GENESIS FIELD RESULTS:\n{json.dumps(slim_items, indent=2)}\n\n"
+            f"TARGET JSON SCHEMA:\n{sample_json}\n\n"
+            "Return a JSON object with a 'test_cases' array — one entry per field result."
+        )
+        try:
+            limiter = get_rate_limiter(GENERATION_MODEL)
+            limiter.acquire(estimate_tokens(format_prompt))
+            fmt_response = generate_content_with_key_rotation(
+                model=GENERATION_MODEL,
+                contents=format_prompt,
+                config={
+                    "temperature": 0.1,
+                    "system_instruction": format_system,
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            generated_json = json.loads(fmt_response.choices[0].message.content)
+        except Exception as e:
+            print(f"[Genesis QA] Schema formatting failed, using default structure: {e}")
+            generated_json = {"test_cases": slim_items}
+    else:
+        generated_json = {"test_cases": slim_items}
+
+    return golden_items, generated_json
+
 
 def _is_rate_limit_error(e: Exception) -> bool:
     text = str(e).lower()
@@ -423,7 +1473,7 @@ def generate_content_with_key_rotation(model: str, contents, config=None, cooldo
 
 # --- Custom Groq Evaluator ---
 class GroqEvaluatorLLM(DeepEvalBaseLLM):
-    def __init__(self, model_name="llama-3.3-70b-versatile"):
+    def __init__(self, model_name="openai/gpt-oss-120b"):
         self.model_name = model_name
 
     def load_model(self):
@@ -438,7 +1488,10 @@ class GroqEvaluatorLLM(DeepEvalBaseLLM):
         # Fix: only truncate if we actually need to, and when we do, cut
         # from the MIDDLE (keep the head with task setup and the tail with
         # the output-format spec, which DeepEval always needs intact).
-        max_chars = 12000
+        # Keep the actual request comfortably below Groq's 8,000 TPM limit.
+        # DeepEval adds its own instructions/schema around the supplied prompt,
+        # so the source prompt must be kept well below the provider limit.
+        max_chars = 6000
         if len(prompt) > max_chars:
             head_len = int(max_chars * 0.6)
             tail_len = max_chars - head_len
@@ -453,15 +1506,40 @@ class GroqEvaluatorLLM(DeepEvalBaseLLM):
         base_delay = 3.0
         limiter = get_rate_limiter(self.model_name)
 
+        # Groq (like OpenAI) requires the literal word "json" to appear
+        # somewhere in the prompt when response_format=json_object is set,
+        # or the request is rejected outright. DeepEval's metric templates
+        # always include JSON output instructions, so this holds in
+        # practice — but fall back to an unconstrained call rather than
+        # hard-failing if some template variant ever doesn't satisfy it.
+        force_json = "json" in truncated_prompt.lower()
+
         for attempt in range(max_retries):
             try:
                 limiter.acquire(estimate_tokens(truncated_prompt))
+                request_config = {"temperature": 0.0}
+                if force_json:
+                    # DeepEval's metric templates only ASK for JSON in the
+                    # prompt text; without Groq's actual JSON mode the judge
+                    # model can drift into prose or markdown-fenced JSON,
+                    # which DeepEval's json.loads then rejects with
+                    # "Evaluation LLM outputted an invalid JSON." Forcing
+                    # json_object here (same as the QA-formatting calls)
+                    # makes Groq guarantee syntactically valid JSON.
+                    request_config["response_format"] = {"type": "json_object"}
                 response = generate_content_with_key_rotation(
                     model=self.model_name,
                     contents=truncated_prompt,
-                    config={"temperature": 0.0},
+                    config=request_config,
                 )
-                return (response.choices[0].message.content or "")
+                content = (response.choices[0].message.content or "").strip()
+                # Extra safety net: even in JSON mode some models still wrap
+                # the object in a ```json ... ``` fence. Strip it so DeepEval's
+                # own json.loads doesn't choke on the fence markers.
+                fence_match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", content, re.DOTALL | re.IGNORECASE)
+                if fence_match:
+                    content = fence_match.group(1).strip()
+                return content
             except Exception as e:
                 if _is_rate_limit_error(e) and attempt < max_retries - 1:
                     # Every key in the pool was already tried and rate limited
@@ -470,6 +1548,13 @@ class GroqEvaluatorLLM(DeepEvalBaseLLM):
                     sleep_time = self._resolve_retry_delay(str(e), attempt, base_delay)
                     print(f"[DeepEval] All keys rate limited on {self.model_name}. Retrying in {sleep_time:.1f}s...")
                     time.sleep(sleep_time)
+                    continue
+                if force_json and "json" in str(e).lower() and attempt < max_retries - 1:
+                    # response_format=json_object was rejected by the
+                    # provider for this particular prompt — retry once
+                    # without it rather than failing the whole evaluation.
+                    print(f"[DeepEval] json_object response_format rejected, retrying without it: {e}")
+                    force_json = False
                     continue
                 raise e
 
@@ -638,48 +1723,103 @@ def select_contexts_for_synthesis(chunk_texts: List[str], count: int) -> List[Li
     return [[c] for c in chunk_texts]
 
 
-async def synthesize_golden_dataset(doc_text: str, count: int) -> List[dict]:
-    """Uses DeepEval's Synthesizer to generate a golden QA dataset grounded
-    directly in the source document. This becomes the ground truth for both
-    the generation prompt (each golden is reformatted 1:1 into the target
-    schema) and the per-item evaluation afterwards — replacing the old
-    approach of using sample_json (or a single auto-summarized reference)
-    as the expected_output for evaluation."""
-    if not doc_text or not doc_text.strip():
+async def synthesize_golden_dataset(documents: List[dict], count: int) -> List[dict]:
+    """Generates one combined golden QA dataset from all documents in a
+    session. Each synthesis context is explicitly tagged with its source
+    document, and some contexts can contain chunks from multiple documents so
+    the resulting golden set can test cross-document questions as well."""
+    if not documents:
         return []
 
-    chunk_texts = chunk_document_full(doc_text, chunk_size=800, overlap=100, max_chunks=max(count * 3, 60))
-    if not chunk_texts:
+    # Build source-tagged chunks independently so provenance is never lost.
+    document_chunks = []
+    for doc in documents:
+        filename = doc.get("filename", "document")
+        chunks = chunk_document_full(
+            doc.get("source_doc", ""),
+            chunk_size=800,
+            overlap=100,
+            max_chunks=max(count * 3, 60),
+        )
+        tagged = [f"[SOURCE DOCUMENT: {filename}]\n{chunk}" for chunk in chunks if chunk.strip()]
+        if tagged:
+            document_chunks.append((filename, tagged))
+
+    if not document_chunks:
         return []
 
-    contexts = select_contexts_for_synthesis(chunk_texts, count)
+    # Distribute contexts across all uploaded documents. When multiple
+    # documents exist, periodically provide a two-document context so the
+    # synthesizer can create multi-document questions where appropriate.
+    contexts: List[List[str]] = []
+    pointers = [0] * len(document_chunks)
+    while len(contexts) < count:
+        made_progress = False
+        for i, (_, chunks) in enumerate(document_chunks):
+            if len(contexts) >= count:
+                break
+            if pointers[i] < len(chunks):
+                primary = chunks[pointers[i]]
+                pointers[i] += 1
+                if len(document_chunks) > 1 and len(contexts) % 3 == 2:
+                    j = (i + 1) % len(document_chunks)
+                    if pointers[j] < len(document_chunks[j][1]):
+                        contexts.append([primary, document_chunks[j][1][pointers[j]]])
+                        pointers[j] += 1
+                    else:
+                        contexts.append([primary])
+                else:
+                    contexts.append([primary])
+                made_progress = True
+        if not made_progress:
+            break
+
     if not contexts:
         return []
 
-    max_goldens_per_context = 1 if len(chunk_texts) >= count else max(1, -(-count // len(contexts)))
     evolution_config = SYNTHESIS_EVOLUTION_CONFIG.get(count, SYNTHESIS_EVOLUTION_CONFIG[20])
-
     synth_llm = GroqEvaluatorLLM(model_name=SYNTHESIZER_MODEL)
     synthesizer = Synthesizer(model=synth_llm, async_mode=True, evolution_config=evolution_config)
 
+    # Groq has a strict per-request token limit. Sending every synthesis
+    # context in one call can exceed that limit for larger documents. Process
+    # the already-constructed contexts in small batches and combine the
+    # resulting goldens. The context construction above is intentionally
+    # unchanged so multi-document contexts are preserved.
+    # One context per synthesizer request keeps the provider request small.
+    SYNTHESIS_BATCH_SIZE = 1
+    goldens = []
     try:
-        goldens = await synthesizer.a_generate_goldens_from_contexts(
-            contexts=contexts,
-            include_expected_output=True,
-            max_goldens_per_context=max_goldens_per_context,
-        )
+        for batch_start in range(0, len(contexts), SYNTHESIS_BATCH_SIZE):
+            batch_contexts = contexts[batch_start:batch_start + SYNTHESIS_BATCH_SIZE]
+            batch_goldens = await synthesizer.a_generate_goldens_from_contexts(
+                contexts=batch_contexts,
+                include_expected_output=True,
+                max_goldens_per_context=1,
+            )
+            if batch_goldens:
+                goldens.extend(batch_goldens)
+            if len(goldens) >= count:
+                break
     except Exception as e:
         print(f"[Synthesizer] Golden dataset generation failed, falling back to direct generation: {e}")
         return []
 
-    golden_items = [
-        {
+    golden_items = []
+    for g in goldens:
+        if not g or not g.input:
+            continue
+        context = g.context or []
+        source_documents, source_pages = _source_metadata_from_context(context)
+        golden_items.append({
             "question": g.input,
             "expected_output": g.expected_output,
-            "context": g.context or [],
-        }
-        for g in goldens if g and g.input
-    ]
+            "context": context,
+            "source_documents": source_documents,
+            "source_pages": source_pages,
+            "multi_document": len(source_documents) > 1,
+        })
+
     return golden_items[:count]
 
 
@@ -1029,6 +2169,80 @@ def build_reference_answer(eval_llm: "GroqEvaluatorLLM", context_chunks: List[st
         print(f"[DeepEval] Reference answer generation failed: {e}")
         return None
 
+async def _run_genesis_geval(golden_items: List[dict], doc_text: str) -> dict:
+    """Runs a GEval pass over genesis field extractions.
+
+    For each extracted field, checks:
+    1. The answer is not NOT_FOUND (coverage score)
+    2. The answer matches the expected format for its field type
+    3. Dropdown answers are one of the valid options
+
+    Returns a metrics dict compatible with the existing renderEvaluation() UI.
+    """
+    total = len(golden_items)
+    if total == 0:
+        return {"overall_score": 0.0, "skipped": False, "genesis_coverage": 0.0}
+
+    found = sum(1 for g in golden_items if g.get("expected_output") not in ("NOT_FOUND", None, ""))
+    coverage = round(found / total, 2)
+
+    # Format validation per field type
+    format_ok = 0
+    dropdown_ok = 0
+    dropdown_total = 0
+    for g in golden_items:
+        val = g.get("expected_output", "")
+        ftype = g.get("type", "")
+        options = next((f.get("options") for f in GENESIS_FIELDS if f["field_name"] == g.get("field_name")), None)
+
+        if val in ("NOT_FOUND", None, ""):
+            continue
+
+        # Format checks
+        if ftype == "date":
+            format_ok += 1 if re.match(r"\d{2}/\d{2}/\d{4}", val) else 0
+        elif ftype == "calculated":
+            format_ok += 1 if any(c in val for c in ["$", "%", "SF", "days"]) else 0
+        elif ftype == "freeform":
+            format_ok += 1 if len(val.strip()) > 2 else 0
+        elif ftype in ("dropdown", "user_input"):
+            format_ok += 1
+        elif ftype == "narrative":
+            format_ok += 1 if len(val.strip()) > 20 else 0
+        else:
+            format_ok += 1
+
+        # Dropdown validation
+        if options:
+            dropdown_total += 1
+            if any(val.lower() == o.lower() or val.lower() in o.lower() for o in options):
+                dropdown_ok += 1
+
+    format_score = round(format_ok / found, 2) if found > 0 else 0.0
+    dropdown_score = round(dropdown_ok / dropdown_total, 2) if dropdown_total > 0 else 1.0
+    overall = round((coverage + format_score + dropdown_score) / 3, 2)
+
+    not_found_fields = [g["field_name"] for g in golden_items if g.get("expected_output") in ("NOT_FOUND", None, "")]
+
+    return {
+        "overall_score": overall,
+        "skipped": False,
+        "passed": overall >= 0.7,
+        "genesis_coverage": coverage,
+        "format_score": format_score,
+        "dropdown_accuracy": dropdown_score,
+        "fields_found": found,
+        "fields_total": total,
+        "not_found_fields": not_found_fields,
+        "reason": (
+            f"Coverage: {found}/{total} fields extracted ({coverage*100:.0f}%) | "
+            f"Format valid: {format_ok}/{found} | "
+            f"Dropdown accuracy: {dropdown_ok}/{dropdown_total} | "
+            f"NOT_FOUND: {', '.join(not_found_fields) if not_found_fields else 'none'}"
+        ),
+    }
+
+
 async def run_deepeval_evaluation(doc_text: str, generated_json: dict, sample_json: str = "") -> dict:
     """Aggregate, single-score DeepEval pass over the whole generated dataset,
     run immediately after generation (mirrors the original app's flow). This
@@ -1171,12 +2385,17 @@ async def get_session(session_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    documents = _ensure_legacy_document(session_id, row)
+    processable_documents = _get_processable_documents(documents)
+    combined_doc_text = _combined_document_text(processable_documents)
+
     return {
         "session_id": row["session_id"],
         "title": row["title"],
         "filename": row["filename"],
         "sample_json": row["sample_json"],
-        "has_document": bool(row["source_doc"]),
+        "has_document": bool(combined_doc_text),
+        "documents": _session_document_summary(documents),
         "status": row["status"],
         "is_golden": bool(row["is_golden"]),
         "generated_data": json.loads(row["generated_qa"]) if row["generated_qa"] else None,
@@ -1184,19 +2403,65 @@ async def get_session(session_id: str):
         "deepeval_details": json.loads(row["deepeval_details"]) if row["deepeval_details"] else None,
         "test_case_count": row["test_case_count"] if row["test_case_count"] else 20,
         "rag_config": json.loads(row["rag_config"]) if row["rag_config"] else None,
-        "chat_enabled": bool(row["rag_config"] and row["source_doc"]),
+        "chat_enabled": bool(row["rag_config"] and combined_doc_text),
         "per_question_results": json.loads(row["per_question_results"]) if row["per_question_results"] else None,
         "golden_dataset": json.loads(row["golden_dataset"]) if row["golden_dataset"] else None
     }
 
+
+@app.delete("/api/sessions/{session_id}/documents/{document_id}")
+async def delete_session_document(session_id: str, document_id: str):
+    """Removes one document from a session. The session's QA/golden dataset is
+    intentionally not regenerated here; the user clicks Generate to rebuild
+    the current combined dataset from the remaining documents."""
+    _ensure_documents_table()
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT document_id FROM session_documents WHERE session_id = ? AND document_id = ?",
+        (session_id, document_id)
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Document not found in this session.")
+
+    conn.execute(
+        "DELETE FROM session_documents WHERE session_id = ? AND document_id = ?",
+        (session_id, document_id)
+    )
+    conn.commit()
+    conn.close()
+
+    documents = _get_session_documents(session_id)
+    processable_documents = _get_processable_documents(documents)
+    combined_doc_text = _combined_document_text(processable_documents)
+    filenames = ", ".join(d["filename"] for d in documents)
+
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE sessions SET filename = ?, source_doc = ? WHERE session_id = ?",
+        (filenames, combined_doc_text, session_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "message": "Document removed.",
+        "documents": _session_document_summary(documents),
+        "has_document": bool(combined_doc_text),
+    }
+
+
 @app.post("/api/sessions/{session_id}/generate")
 async def generate_qa_testcases(
     session_id: str,
+    files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
     sample_json: str = Form(...),
-    test_case_count: int = Form(20)
+    test_case_count: int = Form(20),
+    genesis_mode: bool = Form(False),
+    genesis_field_count: int = Form(32),  # 10, 20, or 32 (all)
 ):
-    if test_case_count not in ALLOWED_TEST_CASE_COUNTS:
+    if not genesis_mode and test_case_count not in ALLOWED_TEST_CASE_COUNTS:
         raise HTTPException(
             status_code=400,
             detail=f"test_case_count must be one of {ALLOWED_TEST_CASE_COUNTS}"
@@ -1208,54 +2473,143 @@ async def generate_qa_testcases(
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Session not found")
+    conn.close()
 
-    filename = row["filename"]
-    doc_text = row["source_doc"] or ""
+    # Existing sessions created before multi-document support are migrated into
+    # the new document table automatically.
+    documents = _ensure_legacy_document(session_id, row)
 
+    upload_list: List[UploadFile] = []
+    if files:
+        upload_list.extend([f for f in files if f and f.filename])
     if file and file.filename:
-        filename = file.filename
-        content = await file.read()
-        doc_text = extract_document_text(content, filename)
+        upload_list.append(file)
+
+    if upload_list:
+        for upload in upload_list:
+            if _is_plans_document(upload.filename):
+                # Store Plans files in the session, but do not extract or process them.
+                _add_uploaded_document(session_id, upload.filename, "")
+                continue
+
+            content = await upload.read()
+            extracted = extract_document_text(content, upload.filename)
+            if not extracted.strip():
+                continue
+            _add_uploaded_document(session_id, upload.filename, extracted)
+        documents = _get_session_documents(session_id)
+
+    processable_documents = _get_processable_documents(documents)
+    if not processable_documents:
+        raise HTTPException(status_code=400, detail="Upload at least one processable document. Files with 'Plans' in the filename are stored only and are not used for generation.")
 
     if not groq_pool:
-        conn.close()
         raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
 
+    # One combined representation is used by the generation/evaluation path.
+    # The golden synthesizer itself works directly from source-tagged document
+    # contexts and does not use the vector store.
+    doc_text = _combined_document_text(processable_documents)
+    filename = ", ".join(d["filename"] for d in processable_documents)
     truncated_context = doc_text[:8000] if doc_text else "No document context uploaded."
 
-    # Step 1: synthesize a golden QA dataset from the actual document via
-    # DeepEval's Synthesizer. This is the ground truth from here on —
-    # sample_json is used ONLY for output schema/shape, never as expected_output.
-    golden_items = await synthesize_golden_dataset(doc_text, test_case_count)
-
-    has_page_markers = "[PAGE " in truncated_context
-    page_instruction = (
-        "The document context contains [PAGE n] markers showing where each page starts. "
-        "For every test case, add a field named \"page_no\" set to the integer page number "
-        "the underlying fact was drawn from — cross-reference each item's question/answer "
-        "against the document context below to find the right page."
-        if has_page_markers else
-        "The document has no page markers (non-PDF source). Omit any page_no field, "
-        "or set it to null if your schema requires the key to be present."
-    )
-
-    if golden_items:
-        # Step 2: give the LLM the golden dataset + the document, and have it
-        # reformat each golden 1:1 (same order, same count) into the target
-        # schema — this keeps generation aligned with the goldens so the
-        # per-item eval below can match by index with no fuzzy matching.
-        golden_dataset_json = json.dumps(golden_items, indent=2)
-        system_prompt = (
-            "You are an expert QA Automation Engineer. You are given a source document AND a "
-            "synthetically generated golden QA dataset already derived from that same document. "
-            "Reformat EACH golden item, in the same order, into the target JSON schema — do not "
-            "invent new facts, do not drop items, do not merge items, do not add extra items. "
-            "Preserve the original question intent and answer content; only adapt structure and "
-            "field names to match the schema, and fill in any schema fields (like page_no) using "
-            "the source document."
+    # ── Step 1: Generate goldens & QA test cases ──────────────────────────────
+    if genesis_mode:
+        # Genesis field-targeted mode: one golden per testable field (32 total).
+        # Skips the generic DeepEval Synthesizer and directly queries the LLM
+        # for each of the 32 extractable/calculable Genesis fields.
+        n = min(max(genesis_field_count, 1), len(GENESIS_FIELDS))
+        print(f"[Generate] Genesis mode: generating {n} field-targeted goldens (of {len(GENESIS_FIELDS)} total)...")
+        golden_items, generated_json = await generate_genesis_field_goldens(
+            processable_documents, sample_json, field_count=n
         )
-        user_prompt = f"""DOCUMENT CONTEXT:
-{truncated_context}
+        langsmith_dataset_id = save_golden_dataset_to_langsmith(session_id, golden_items)
+    else:
+        # Standard mode: synthesize ONE combined golden QA dataset from all documents.
+        golden_items = await synthesize_golden_dataset(processable_documents, test_case_count)
+
+        # Store this session's combined golden dataset in its one LangSmith dataset.
+        # Regeneration replaces the previous examples for this same session.
+        langsmith_dataset_id = save_golden_dataset_to_langsmith(session_id, golden_items)
+
+        has_page_markers = "[PAGE " in truncated_context
+        page_instruction = (
+            "The document context contains [SOURCE DOCUMENT: filename] markers and [PAGE n] markers. "
+            "For every test case, preserve the source document identity. If the target schema supports it, "
+            "add a field named \"page_no\" set to the integer page number the underlying fact was drawn from. "
+            "If a question requires more than one document, use the relevant source documents."
+            if has_page_markers else
+            "The document context contains [SOURCE DOCUMENT: filename] markers. Preserve the source document identity. "
+            "If the target schema supports source_document/source_documents, populate it from the relevant document(s). "
+            "Omit page_no when the source has no page markers."
+        )
+
+        if golden_items:
+            system_prompt = (
+                "You are an expert QA Automation Engineer. You are given multiple source documents AND a "
+                "synthetically generated golden QA dataset derived from those documents. Reformat EACH golden "
+                "item, in the same order, into the target JSON schema — do not invent new facts, do not drop items, "
+                "do not merge items, do not add extra items. Preserve the original question intent and answer content. "
+                "When a golden item is based on multiple documents, preserve that cross-document intent. "
+                "Use the source document markers and page markers to fill schema fields when available."
+            )
+            max_retries = 4
+            base_delay = 2.0
+            QA_FORMAT_BATCH_SIZE = 2
+            generated_items = []
+
+            for batch_start in range(0, len(golden_items), QA_FORMAT_BATCH_SIZE):
+                batch_items = golden_items[batch_start:batch_start + QA_FORMAT_BATCH_SIZE]
+
+                # Build this batch's document context from ONLY the source
+                # contexts attached to the golden items in the batch, instead of
+                # sending the entire (truncated) document on every batch. Each
+                # golden already carries the exact source-tagged chunk(s) it was
+                # synthesized from, so this is sufficient grounding and is far
+                # smaller than the 8,000-char whole-document context, which is
+                # what was pushing batches over the Groq per-request token limit.
+                batch_context_chunks: List[str] = []
+                seen_chunks = set()
+                for item in batch_items:
+                    for chunk in (item.get("context") or []):
+                        if chunk and chunk not in seen_chunks:
+                            seen_chunks.add(chunk)
+                            batch_context_chunks.append(chunk)
+                batch_context = (
+                    "\n\n".join(batch_context_chunks)
+                    if batch_context_chunks
+                    else "No document context uploaded."
+                )
+                # Defensive cap: chunk_document_full(chunk_size=800) keeps
+                # individual chunks small, but guard against any unexpectedly
+                # large context (e.g. a chunk carrying a long vision-model
+                # description) still blowing the batch past the TPM limit.
+                BATCH_CONTEXT_CHAR_CAP = 4000
+                if len(batch_context) > BATCH_CONTEXT_CHAR_CAP:
+                    batch_context = batch_context[:BATCH_CONTEXT_CHAR_CAP] + "\n...[truncated]..."
+
+                # The raw "context" chunks are already included above in
+                # DOCUMENT CONTEXT, and source_documents/source_pages were
+                # already extracted from that same context at golden-synthesis
+                # time (_source_metadata_from_context). Re-embedding the full
+                # "context" list inside every golden item here duplicated that
+                # same text a second time in the same request and was the
+                # remaining cause of oversized batches. Send only the fields the
+                # formatter actually needs to reformat each item.
+                slim_batch_items = [
+                    {
+                        "question": item.get("question"),
+                        "expected_output": item.get("expected_output"),
+                        "source_documents": item.get("source_documents"),
+                        "source_pages": item.get("source_pages"),
+                        "multi_document": item.get("multi_document"),
+                    }
+                    for item in batch_items
+                ]
+                golden_dataset_json = json.dumps(slim_batch_items, indent=2)
+
+                user_prompt = f"""DOCUMENT CONTEXT:
+{batch_context}
 
 GOLDEN QA DATASET (produce exactly one output item per golden item below, in this same order):
 {golden_dataset_json}
@@ -1263,21 +2617,51 @@ GOLDEN QA DATASET (produce exactly one output item per golden item below, in thi
 TARGET SAMPLE JSON SCHEMA:
 {sample_json if sample_json else "{}"}
 
-PAGE NUMBER INSTRUCTION:
+SOURCE/PAGE INSTRUCTION:
 {page_instruction}
 """
-    else:
-        # Fallback: golden synthesis produced nothing (e.g. very short/empty
-        # doc, or the synthesizer call failed) — generate directly from the
-        # document like before, and skip per-item eval since there's no
-        # golden ground truth to evaluate against.
-        depth_instruction = TEST_CASE_DEPTH_INSTRUCTIONS[test_case_count]
-        system_prompt = (
-            "You are an expert QA Automation Engineer. Generate QA test cases "
-            "extracted strictly from the provided text and visual diagram descriptions in the source document, "
-            "adhering to the target JSON schema."
-        )
-        user_prompt = f"""DOCUMENT CONTEXT:
+                batch_generated_json = None
+                for attempt in range(max_retries):
+                    try:
+                        response = generate_content_with_key_rotation(
+                            model=GENERATION_MODEL,
+                            contents=user_prompt,
+                            config={
+                                "temperature": 0.2,
+                                "system_instruction": system_prompt,
+                                "response_format": {"type": "json_object"},
+                            },
+                        )
+                        batch_generated_json = json.loads(response.choices[0].message.content)
+                        break
+                    except Exception as e:
+                        if _is_rate_limit_error(e) and attempt < max_retries - 1:
+                            sleep_time = GroqEvaluatorLLM._resolve_retry_delay(str(e), attempt, base_delay)
+                            print(f"[Generate] All keys rate limited on {GENERATION_MODEL}. Retrying in {sleep_time:.1f}s...")
+                            time.sleep(sleep_time)
+                            continue
+                        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+                if isinstance(batch_generated_json, list):
+                    generated_items.extend(batch_generated_json)
+                elif isinstance(batch_generated_json, dict):
+                    for key in ("test_cases", "items", "data"):
+                        if isinstance(batch_generated_json.get(key), list):
+                            generated_items.extend(batch_generated_json[key])
+                            break
+                    else:
+                        generated_items.append(batch_generated_json)
+
+            generated_json = {"test_cases": generated_items[:len(golden_items)]}
+
+        else:
+            depth_instruction = TEST_CASE_DEPTH_INSTRUCTIONS[test_case_count]
+            system_prompt = (
+                "You are an expert QA Automation Engineer. Generate QA test cases extracted strictly from the "
+                "provided source documents, including their text and visual/diagram descriptions, adhering to the "
+                "target JSON schema. Do not use outside knowledge."
+            )
+            user_prompt = f"""DOCUMENT CONTEXT:
 {truncated_context}
 
 TARGET SAMPLE JSON SCHEMA:
@@ -1286,51 +2670,70 @@ TARGET SAMPLE JSON SCHEMA:
 GENERATION DEPTH INSTRUCTION:
 {depth_instruction}
 
-PAGE NUMBER INSTRUCTION:
+SOURCE/PAGE INSTRUCTION:
 {page_instruction}
 """
-
-    max_retries = 4
-    base_delay = 2.0
-    for attempt in range(max_retries):
-        try:
-            response = generate_content_with_key_rotation(
-                model=GENERATION_MODEL,
-                contents=user_prompt,
-                config={
-                    "temperature": 0.2,
-                    "system_instruction": system_prompt,
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            generated_json = json.loads(response.choices[0].message.content)
-            break
-        except Exception as e:
-            if _is_rate_limit_error(e) and attempt < max_retries - 1:
-                sleep_time = GroqEvaluatorLLM._resolve_retry_delay(str(e), attempt, base_delay)
-                print(f"[Generate] All keys rate limited on {GENERATION_MODEL}. Retrying in {sleep_time:.1f}s...")
-                time.sleep(sleep_time)
-                continue
-            conn.close()
-            raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+            max_retries = 4
+            base_delay = 2.0
+            for attempt in range(max_retries):
+                try:
+                    response = generate_content_with_key_rotation(
+                        model=GENERATION_MODEL,
+                        contents=user_prompt,
+                        config={
+                            "temperature": 0.2,
+                            "system_instruction": system_prompt,
+                            "response_format": {"type": "json_object"},
+                        },
+                    )
+                    generated_json = json.loads(response.choices[0].message.content)
+                    break
+                except Exception as e:
+                    if _is_rate_limit_error(e) and attempt < max_retries - 1:
+                        sleep_time = GroqEvaluatorLLM._resolve_retry_delay(str(e), attempt, base_delay)
+                        print(f"[Generate] All keys rate limited on {GENERATION_MODEL}. Retrying in {sleep_time:.1f}s...")
+                        time.sleep(sleep_time)
+                        continue
+                    raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
     await asyncio.sleep(1)
 
-    # Step 3: aggregate DeepEval pass over the whole generated dataset. This
-    # is a single overall score shown right after generation — the detailed
-    # per-question breakdown is deliberately NOT shown here; it only appears
-    # later, once the user submits a model config and the RAG pipeline runs
-    # (see /run-rag below).
-    eval_results = await run_deepeval_evaluation(doc_text, generated_json, sample_json)
+    # Step 3: aggregate DeepEval pass over the whole generated dataset.
+    # Skip in genesis mode — the aggregate eval is meaningless for 32 individual
+    # field extractions and the large payload causes JSON parse failures on Groq.
+    # Per-field evaluation happens later via the RAG pipeline run.
+    if genesis_mode:
+        # For genesis mode, run a lightweight GEval pass that checks whether
+        # each extracted field value is a valid, grounded answer.
+        try:
+            eval_results = await _run_genesis_geval(golden_items, doc_text)
+        except Exception as e:
+            print(f"[Generate] Genesis GEval error (non-fatal): {e}")
+            eval_results = {
+                "overall_score": None,
+                "skipped": True,
+                "reason": f"Genesis evaluation error: {str(e)}",
+            }
+    else:
+        try:
+            eval_results = await run_deepeval_evaluation(doc_text, generated_json, sample_json)
+        except Exception as e:
+            print(f"[Generate] DeepEval evaluation error (non-fatal): {e}")
+            eval_results = {
+                "overall_score": None,
+                "skipped": True,
+                "reason": f"Evaluation error: {str(e)}",
+            }
 
+    conn = get_db_connection()
     conn.execute(
-        """UPDATE sessions 
-           SET filename = ?, sample_json = ?, source_doc = ?, generated_qa = ?, 
+        """UPDATE sessions
+           SET filename = ?, sample_json = ?, source_doc = ?, generated_qa = ?,
                golden_dataset = ?, deepeval_score = ?, deepeval_details = ?, is_golden = 0, status = 'Pending',
                test_case_count = ?
            WHERE session_id = ?""",
         (filename, sample_json, doc_text, json.dumps(generated_json),
-         json.dumps(golden_items), eval_results["overall_score"], json.dumps(eval_results),
+         json.dumps(golden_items), eval_results.get("overall_score"), json.dumps(eval_results),
          test_case_count, session_id)
     )
     conn.commit()
@@ -1348,22 +2751,77 @@ PAGE NUMBER INSTRUCTION:
     return {
         "generated_qa": generated_json,
         "golden_dataset": golden_items,
+        "langsmith_dataset_id": langsmith_dataset_id,
         "deepeval": eval_results,
         "status": "Pending",
         "is_golden": False,
         "filename": filename,
-        "requested_count": test_case_count,
-        "actual_count": actual_count
+        "documents": _session_document_summary(documents),
+        "requested_count": len(golden_items) if genesis_mode else test_case_count,
+        "actual_count": actual_count,
+        "genesis_mode": genesis_mode,
     }
+
+def _normalize_question_for_match(value: Any) -> str:
+    """Normalizes a question for safe exact/near-exact golden lookup."""
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[\s\?\.!]+$", "", text)
+    return text
+
+def _extract_qa_items(value: Any) -> List[dict]:
+    """Finds QA objects anywhere in a generated JSON structure."""
+    found = []
+    if isinstance(value, list):
+        for item in value:
+            found.extend(_extract_qa_items(item))
+    elif isinstance(value, dict):
+        question = value.get("question")
+        answer = value.get("expected_output", value.get("answer"))
+        if question is not None and answer is not None:
+            found.append({"question": str(question), "expected_output": str(answer)})
+        else:
+            for child in value.values():
+                found.extend(_extract_qa_items(child))
+    return found
+
+def _append_manual_goldens(session_id: str, old_generated: Any, new_generated: Any, golden_dataset: Any) -> List[dict]:
+    """Adds newly added/edited generated QA items as NEW goldens. Existing
+    goldens are intentionally never modified or removed."""
+    old_items = _extract_qa_items(old_generated)
+    new_items = _extract_qa_items(new_generated)
+    if not isinstance(golden_dataset, list):
+        golden_dataset = []
+
+    # Compare by position where possible. Any changed existing QA becomes a
+    # new golden; extra items are also new goldens.
+    additions = []
+    for idx, item in enumerate(new_items):
+        is_new_or_edited = idx >= len(old_items) or (
+            _normalize_question_for_match(old_items[idx].get("question")) != _normalize_question_for_match(item.get("question"))
+            or str(old_items[idx].get("expected_output", "")).strip() != str(item.get("expected_output", "")).strip()
+        )
+        if is_new_or_edited:
+            additions.append({
+                "question": item["question"],
+                "expected_output": item["expected_output"],
+                "context": [],
+                "source_documents": [],
+                "source_pages": [],
+                "multi_document": False,
+                "manual_from_qa_edit": True
+            })
+
+    if additions:
+        golden_dataset.extend(additions)
+    return golden_dataset
 
 @app.put("/api/sessions/{session_id}/qa")
 async def update_generated_qa(session_id: str, payload: dict):
-    """Persists user edits made to the generated QA dataset in the UI. Marks
-    the session 'Edited' so it's visually distinct from a freshly generated,
-    unreviewed dataset; the stored golden_dataset is left untouched so the
-    edited QA can be re-evaluated against it via /re-evaluate."""
+    """Persists generated-QA edits. New/edited QA becomes a NEW golden
+    testcase; previous goldens are preserved."""
     conn = get_db_connection()
-    row = conn.execute("SELECT session_id FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1372,21 +2830,30 @@ async def update_generated_qa(session_id: str, payload: dict):
     if raw is None:
         conn.close()
         raise HTTPException(status_code=400, detail="Missing 'generated_qa' in request body.")
-
-    # Accept either an already-parsed JSON value or a JSON string.
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except json.JSONDecodeError as e:
         conn.close()
         raise HTTPException(status_code=400, detail=f"generated_qa must be valid JSON: {e}")
 
-    conn.execute(
-        "UPDATE sessions SET generated_qa = ?, status = 'Edited' WHERE session_id = ?",
-        (json.dumps(parsed), session_id)
-    )
-    conn.commit()
+    try:
+        old_generated = json.loads(row["generated_qa"]) if row["generated_qa"] else []
+        golden_dataset = json.loads(row["golden_dataset"]) if row["golden_dataset"] else []
+        updated_goldens = _append_manual_goldens(session_id, old_generated, parsed, golden_dataset)
+        conn.execute(
+            "UPDATE sessions SET generated_qa = ?, golden_dataset = ?, status = 'Edited' WHERE session_id = ?",
+            (json.dumps(parsed), json.dumps(updated_goldens), session_id)
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
     conn.close()
-    return {"message": "Edits saved", "status": "Edited"}
+
+    # Keep the same per-session LangSmith golden dataset synchronized.
+    langsmith_dataset_id = save_golden_dataset_to_langsmith(session_id, updated_goldens)
+    return {"message": "Edits saved", "status": "Edited", "golden_dataset": updated_goldens, "langsmith_dataset_id": langsmith_dataset_id}
 
 @app.post("/api/sessions/{session_id}/re-evaluate")
 async def re_evaluate_generated_qa(session_id: str):
@@ -1405,7 +2872,9 @@ async def re_evaluate_generated_qa(session_id: str):
         raise HTTPException(status_code=400, detail="No generated QA dataset on this session.")
 
     generated_json = json.loads(row["generated_qa"])
-    doc_text = row["source_doc"] or ""
+    documents = _ensure_legacy_document(session_id, row)
+    processable_documents = _get_processable_documents(documents)
+    doc_text = _combined_document_text(processable_documents)
     sample_json = row["sample_json"] or ""
 
     eval_results = await run_deepeval_evaluation(doc_text, generated_json, sample_json)
@@ -1426,13 +2895,15 @@ async def save_rag_config(session_id: str, config: RAGConfigRequest):
         raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
 
     conn = get_db_connection()
-    row = conn.execute("SELECT source_doc FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Session not found")
-    if not (row["source_doc"] or "").strip():
+    documents = _ensure_legacy_document(session_id, row)
+    processable_documents = _get_processable_documents(documents)
+    if not processable_documents:
         conn.close()
-        raise HTTPException(status_code=400, detail="Upload a document before saving the RAG configuration.")
+        raise HTTPException(status_code=400, detail="Upload at least one processable document before saving the RAG configuration. Files with 'Plans' in the filename are stored only and are not used for RAG.")
 
     config_dict = config.dict()
     conn.execute(
@@ -1464,7 +2935,9 @@ async def run_rag_pipeline(session_id: str, config: Optional[RAGConfigRequest] =
         conn.close()
         raise HTTPException(status_code=404, detail="Session not found")
 
-    doc_text = row["source_doc"] or ""
+    documents = _ensure_legacy_document(session_id, row)
+    processable_documents = _get_processable_documents(documents)
+    doc_text = _combined_document_text(processable_documents)
     generated_qa_raw = row["generated_qa"]
     golden_items = json.loads(row["golden_dataset"]) if row["golden_dataset"] else []
 
@@ -1504,7 +2977,7 @@ async def run_rag_pipeline(session_id: str, config: Optional[RAGConfigRequest] =
             _build_or_get_chroma_collection,
             session_id,
             doc_text,
-            row["filename"] or "",
+            ", ".join(d["filename"] for d in documents),
             config.embedding_model,
             config.chunk_size,
             config.chunk_overlap,
@@ -1579,10 +3052,12 @@ async def chat_with_document(session_id: str, payload: dict):
         conn.close()
         raise HTTPException(status_code=404, detail="Session not found")
 
-    doc_text = row["source_doc"] or ""
+    documents = _ensure_legacy_document(session_id, row)
+    processable_documents = _get_processable_documents(documents)
+    doc_text = _combined_document_text(processable_documents)
     if not doc_text.strip():
         conn.close()
-        raise HTTPException(status_code=400, detail="No source document on this session.")
+        raise HTTPException(status_code=400, detail="No source documents on this session.")
     if not row["rag_config"]:
         conn.close()
         raise HTTPException(status_code=400, detail="Save the RAG configuration before using chat.")
@@ -1613,7 +3088,7 @@ async def chat_with_document(session_id: str, payload: dict):
         "top_k": config.top_k,
         "search_model": config.search_model,
         "temperature": config.temperature,
-        "document_filename": row["filename"] or "",
+        "document_filenames": [d["filename"] for d in processable_documents],
         "feedback_improvement_used": bool(improvement_feedback),
     }
 
@@ -1637,7 +3112,7 @@ async def chat_with_document(session_id: str, payload: dict):
                 _build_or_get_chroma_collection,
                 session_id,
                 doc_text,
-                row["filename"] or "",
+                ", ".join(d["filename"] for d in documents),
                 config.embedding_model,
                 config.chunk_size,
                 config.chunk_overlap,
@@ -1758,6 +3233,55 @@ async def chat_with_document(session_id: str, payload: dict):
         conn.close()
         raise HTTPException(status_code=500, detail=f"Chat generation failed: {str(e)}")
 
+@app.post("/api/chat/{message_id}/metrics")
+async def calculate_chat_metrics(message_id: int):
+    """Evaluates one stored chatbot answer. If the question exactly matches
+    a golden question (ignoring case/whitespace/final punctuation), its golden
+    expected_output is used as ground truth, enabling Context Precision/Recall.
+    Otherwise only the three ground-truth-free metrics are calculated."""
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT id, session_id, question, answer, retrieved_context FROM chat_messages WHERE id = ?",
+        (message_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Chat message not found")
+
+    session = conn.execute(
+        "SELECT golden_dataset FROM sessions WHERE session_id = ?",
+        (row["session_id"],)
+    ).fetchone()
+    conn.close()
+
+    golden_match = None
+    if session and session["golden_dataset"]:
+        try:
+            goldens = json.loads(session["golden_dataset"])
+        except Exception:
+            goldens = []
+        target = _normalize_question_for_match(row["question"])
+        for golden in goldens if isinstance(goldens, list) else []:
+            if _normalize_question_for_match(golden.get("question")) == target:
+                golden_match = golden
+                break
+
+    try:
+        retrieved = json.loads(row["retrieved_context"] or "[]")
+    except Exception:
+        retrieved = []
+    if not isinstance(retrieved, list):
+        retrieved = [str(retrieved)]
+
+    eval_llm = GroqEvaluatorLLM(model_name=RAG_JUDGE_MODEL)
+    result = await evaluate_single_question(
+        row["question"], row["answer"], retrieved,
+        (golden_match or {}).get("expected_output") if golden_match else None,
+        eval_llm
+    )
+    result["golden_match"] = bool(golden_match)
+    return result
+
 @app.get("/api/sessions/{session_id}/chat-history")
 async def get_chat_history(session_id: str):
     conn = get_db_connection()
@@ -1837,18 +3361,25 @@ async def approve_golden_dataset(session_id: str):
     conn.close()
     return {"message": "Saved to Golden Dataset", "status": "Approved", "is_golden": True}
 
-@app.get("/api/golden-dataset/export")
-async def export_golden_dataset():
+@app.get("/api/sessions/{session_id}/golden-dataset/export")
+async def export_golden_dataset(session_id: str):
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM sessions WHERE is_golden = 1").fetchall()
+    row = conn.execute(
+        "SELECT session_id, filename, golden_dataset FROM sessions WHERE session_id = ?",
+        (session_id,)
+    ).fetchone()
     conn.close()
 
-    return [{
-        "session_id": r["session_id"],
-        "filename": r["filename"],
-        "qa_data": json.loads(r["generated_qa"]) if r["generated_qa"] else {},
-        "deepeval_score": r["deepeval_score"],
-        "status": r["status"]
-    } for r in rows]
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
 
+    golden_dataset = json.loads(row["golden_dataset"]) if row["golden_dataset"] else []
+    safe_session_id = re.sub(r"[^A-Za-z0-9_-]+", "_", session_id)
+    filename = f"golden_dataset_{safe_session_id}.json"
+
+    return Response(
+        content=json.dumps(golden_dataset, indent=2, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
