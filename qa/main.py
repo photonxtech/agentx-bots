@@ -2467,6 +2467,26 @@ async def generate_qa_testcases(
             detail=f"test_case_count must be one of {ALLOWED_TEST_CASE_COUNTS}"
         )
 
+    from fastapi.responses import JSONResponse as _JSONResponse
+    try:
+        return await _generate_impl(
+            session_id, files, file, sample_json,
+            test_case_count, genesis_mode, genesis_field_count,
+        )
+    except HTTPException:
+        raise
+    except Exception as _e:
+        print(f"[Generate] Unhandled error: {_e}")
+        return _JSONResponse(
+            status_code=500,
+            content={"detail": str(_e), "partial_results_saved": True},
+        )
+
+
+async def _generate_impl(
+    session_id: str, files, file, sample_json: str,
+    test_case_count: int, genesis_mode: bool, genesis_field_count: int,
+):
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
 

@@ -1019,6 +1019,9 @@
                     document.getElementById('reEvaluateBtn').disabled = !currentGeneratedData;
                     document.getElementById('approveBtn').disabled = false;
                     await selectSession(activeSessionId);
+                } else if (data.partial_results_saved) {
+                    // Server hit an error after saving results — reload from DB silently
+                    await selectSession(activeSessionId);
                 } else {
                     alert("Generation Failed: " + data.detail);
                 }
