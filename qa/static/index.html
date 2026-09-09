@@ -167,7 +167,7 @@
                             class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono cursor-pointer">
                             <option value="10">10 — Random sample</option>
                             <option value="20">20 — Random sample</option>
-                            <option value="32" selected>32 — All fields</option>
+                            <option value="31" selected>31 — All fields</option>
                         </select>
                     </div>
                 </div>
@@ -610,7 +610,6 @@
                 renderRagResults(s.per_question_results, null, null);
 
                 document.getElementById('generateBtn').disabled = false;
-                document.getElementById('approveBtn').disabled = !s.generated_data;
 
             } catch (err) {
                 console.error("Error loading session details:", err);
@@ -1017,7 +1016,6 @@
                     renderGoldenDataset(data.golden_dataset);
                     renderEvaluation(data.deepeval);
                     document.getElementById('reEvaluateBtn').disabled = !currentGeneratedData;
-                    document.getElementById('approveBtn').disabled = false;
                     await selectSession(activeSessionId);
                 } else if (data.partial_results_saved) {
                     // Server hit an error after saving results — reload from DB silently

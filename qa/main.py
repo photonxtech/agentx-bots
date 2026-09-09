@@ -659,7 +659,7 @@ GENESIS_FIELDS: List[dict] = [
         "extraction_method": "RAG + LLM (header row scan)",
         "expected_doc": "Budget",
         "options": None,
-        "format_hint": "Legal LLC/entity name executing the loan. No timestamps, dates, or individual names.",
+        "format_hint": "Legal LLC/entity name executing the loan. No timestamps, dates, or individual names. In the budget xlsx this field is labeled 'Client' in the header rows.",
         "question_template": "What is the borrower entity (legal LLC or company name) for this project?",
     },
     # ── Executive Summary ──────────────────────────────────────────────────────
@@ -920,23 +920,6 @@ GENESIS_FIELDS: List[dict] = [
         "format_hint": "Civil + Structural + Architectural all provided without defects → option 1. Key sets missing or major deficiencies → option 2. No plans provided → 'N/A'.",
         "question_template": "Are the drawing sets provided sufficient to support the construction scope, or is supplemental plan documentation needed?",
     },
-    {
-        "field_name": "Permit Status",
-        "section": "Loan Summary",
-        "type": "user_input",
-        "source": "Trinity Report / Deal Notes",
-        "extraction_method": "LLM + anti-hallucination text scan gate",
-        "expected_doc": "Trinity",
-        "options": [
-            "Building permits have been issued prior to funding this loan. The Construction Department has received all necessary building permits",
-            'The borrower has applied for building permits and they are currently "RTI" Ready-To-Issue.',
-            "The borrower has been issued partial permits on this project. Permits are expected to be issued.",
-            "The borrower has not yet obtained permits for this loan",
-            "There will not be permits issued/required on this loan",
-        ],
-        "format_hint": "Must match one of the 5 exact permit status strings. LLM is prevented from claiming permits issued unless Trinity text explicitly confirms it.",
-        "question_template": "What is the current building permit status for this project at the time of loan review?",
-    },
     # ── Finished Product Details ───────────────────────────────────────────────
     {
         "field_name": "Property Type",
@@ -1069,7 +1052,20 @@ async def generate_genesis_field_goldens(
     print(f"[Genesis QA] Sampling {len(active_fields)}/{len(GENESIS_FIELDS)} fields")
 
     doc_text = _combined_document_text(documents)
-    today_display = _date.today().strftime("%m/%d/%Y")
+
+    # Use US Eastern Time (America/New_York) — the standard US business timezone.
+    # This ensures Date of Report Approved reflects the correct US date regardless
+    # of what timezone the server is running in (e.g. IST on a developer's machine).
+    import datetime as _datetime
+    try:
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        _us_eastern = _ZoneInfo("America/New_York")
+        today_display = _datetime.datetime.now(_us_eastern).strftime("%m/%d/%Y")
+    except Exception:
+        # zoneinfo fallback — use UTC offset manually (ET is UTC-5 standard / UTC-4 DST)
+        # zoneinfo is available in Python 3.9+; this guard is for safety only
+        today_display = _date.today().strftime("%m/%d/%Y")
+
     source_doc_names = [d["filename"] for d in documents]
 
     import re as _re
@@ -1110,6 +1106,8 @@ async def generate_genesis_field_goldens(
             doc_text_by_label["timeline"] = doc_text_by_label.get("timeline", "") + "\n\n" + clean
         if any(k in fname for k in ["deal notes", "deal_notes", "loan notes"]):
             doc_text_by_label["deal_notes"] = doc_text_by_label.get("deal_notes", "") + "\n\n" + clean
+        if any(k in fname for k in ["budget", "construction budget", "schedule of values"]):
+            doc_text_by_label["budget"] = doc_text_by_label.get("budget", "") + "\n\n" + clean
 
     # Everything except binary budget xlsx
     combined_clean = "\n\n".join(v.strip() for v in doc_text_by_label.values() if v.strip())
@@ -1118,10 +1116,172 @@ async def generate_genesis_field_goldens(
 
     print(f"[Genesis QA] Clean text ready: {len(combined_clean):,} chars | docs: {list(doc_text_by_label.keys())}")
 
+    # ── Pre-extract structured values directly from xlsx text ────────────────
+    # These fields have deterministic values in the budget spreadsheet that the
+    # LLM consistently misses because the xlsx text is long and unformatted.
+    # Extract them in Python first and inject into extracted_values as seeds
+    # so the formula fields (Cost/SF, Cost/Unit, etc.) get correct inputs.
+    def _extract_from_budget_text(budget_text: str) -> dict:
+        """Parse the pipe-separated xlsx text to extract key budget values."""
+        result = {}
+        if not budget_text:
+            return result
+
+        for line in budget_text.split("\n"):
+            parts = [p.strip() for p in line.split("|")]
+
+            # CONTINGENCY row: <row_num> | CONTINGENCY | <rehab_budget_val> | ...
+            # First occurrence only (later ones have #REF! values)
+            if "Contingency Amount" not in result:
+                if (len(parts) >= 3
+                        and parts[1].upper().strip() == "CONTINGENCY"
+                        and parts[2].strip()
+                        and parts[2].strip() not in ("#REF!", "", "0")):
+                    try:
+                        contingency = float(parts[2].strip())
+                        if contingency > 0:
+                            result["Contingency Amount"] = f"${contingency:,.2f}"
+                    except ValueError:
+                        pass
+
+            # CLIENT: | <entity name>
+            if len(parts) >= 2 and parts[0].upper().replace(" ", "") in ("CLIENT:", "CLIENT"):
+                val = parts[1].strip()
+                if val and val not in ("", "#REF!"):
+                    result["Borrower Entity"] = val
+
+            # TOTAL row: | TOTAL | <rehab_budget> | <pre_funding> | <scheduled_values>
+            # Only the first TOTAL row (line 104) has real numbers — later ones have #REF!
+            if "Rehab Amount" not in result:
+                if (len(parts) >= 3
+                        and parts[1].upper().strip() == "TOTAL"
+                        and parts[2].replace(".", "").replace("-", "").isdigit()):
+                    try:
+                        rehab = float(parts[2])
+                        if rehab > 0:
+                            result["Rehab Amount"] = f"${rehab:,.2f}"
+                        # Scheduled Values is col index 4 (0-based)
+                        if len(parts) >= 5:
+                            holdback_str = parts[4].strip()
+                            if holdback_str and holdback_str not in ("#REF!", "0", ""):
+                                try:
+                                    holdback = float(holdback_str)
+                                    if holdback > 0:
+                                        result["Construction Holdback Amount"] = f"${holdback:,.2f}"
+                                except ValueError:
+                                    pass
+                    except ValueError:
+                        pass
+
+        return result
+
+    def _extract_from_timeline_text(timeline_text: str, report_date_str: str) -> dict:
+        """Extract Project Timeline To Date, Remaining Timeline, and Project Complete %
+        directly from the construction timeline document.
+
+        Structure (from PDF extraction):
+          Task Name line → resource lines (text, no dates) → Start date → Finish date → % complete
+
+        - Project start  = Start date of 'Sign Contract' task
+        - Project end    = Finish date of 'Project Close-Out' task
+        - today          = Date of Report Approved (US Eastern)
+        - Elapsed        = today - start
+        - Remaining      = end - today
+        - Complete %     = elapsed / (elapsed + remaining) * 100
+        """
+        import datetime as _dt
+        result = {}
+        if not timeline_text:
+            return result
+
+        DATE_PAT = _re.compile(r'^\d{1,2}/\d{1,2}/\d{4}$')
+
+        def _find_task_dates(lines, task_keywords):
+            """Find Start and Finish dates for a task by scanning lines after the
+            task name. Skips non-date lines (resource names) until two dates found."""
+            for i, line in enumerate(lines):
+                if any(kw.lower() in line.lower() for kw in task_keywords):
+                    dates = []
+                    for j in range(i + 1, min(i + 15, len(lines))):
+                        if DATE_PAT.match(lines[j].strip()):
+                            dates.append(lines[j].strip())
+                            if len(dates) == 2:
+                                break
+                    if len(dates) >= 1:
+                        return dates[0], dates[1] if len(dates) >= 2 else dates[0]
+            return None, None
+
+        lines = timeline_text.split("\n")
+
+        # Parse report date (today in US Eastern)
+        try:
+            today = _dt.datetime.strptime(report_date_str, "%m/%d/%Y").date()
+        except Exception:
+            return result
+
+        # Find project start (Sign Contract — Start date)
+        start_str, _ = _find_task_dates(lines, ["Sign Contract"])
+        # Find project end (Project Close-Out — Finish date)
+        _, end_str = _find_task_dates(lines, ["Project Close-Out", "Project Close Out", "Closeout", "Close-Out"])
+
+        if not start_str or not end_str:
+            return result
+
+        try:
+            start_date = _dt.datetime.strptime(start_str, "%m/%d/%Y").date()
+            end_date   = _dt.datetime.strptime(end_str,   "%m/%d/%Y").date()
+        except Exception:
+            return result
+
+        # Calculate elapsed and remaining
+        elapsed_days   = max((today - start_date).days, 0)
+        remaining_days = max((end_date - today).days, 0)
+
+        elapsed_months   = round(elapsed_days / 30.44, 1)
+        remaining_months = round(remaining_days / 30.44, 1)
+
+        if elapsed_days == 0 and today < start_date:
+            result["Project Timeline To Date"] = "Project has not started yet"
+        else:
+            result["Project Timeline To Date"] = f"{elapsed_days} days ({elapsed_months} months)"
+
+        if remaining_days == 0 and today > end_date:
+            result["Remaining Timeline"] = "Project timeline has passed"
+        else:
+            result["Remaining Timeline"] = f"{remaining_days} days ({remaining_months} months)"
+
+        # Project Complete % = elapsed / (elapsed + remaining) * 100
+        total_days = elapsed_days + remaining_days
+        if total_days > 0:
+            pct = round(elapsed_days / total_days * 100, 1)
+            result["Project Complete Percentage"] = (
+                f"{elapsed_days} / ({elapsed_days} + {remaining_days}) = {pct}%"
+            )
+
+        return result
+
+    # Seed extracted_values with xlsx-derived values before LLM batches run
+    _xlsx_seeds = _extract_from_budget_text(doc_text_by_label.get("budget", ""))
+
+    # Get today's date in US Eastern for timeline calculation
+    import datetime as _datetime
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+        _report_date_str = _datetime.datetime.now(_ZI("America/New_York")).strftime("%m/%d/%Y")
+    except Exception:
+        _report_date_str = today_display
+
+    _timeline_seeds = _extract_from_timeline_text(
+        doc_text_by_label.get("timeline", ""), _report_date_str
+    )
+    _all_seeds = {**_xlsx_seeds, **_timeline_seeds}
+    print(f"[Genesis QA] xlsx seeds: {_xlsx_seeds}")
+    print(f"[Genesis QA] timeline seeds: {_timeline_seeds}")
+
     # ── Map each field to its source document text ───────────────────────────
     label_map = {
         "Trinity":    "trinity",
-        "Budget":     "trinity",   # budget table is inside the Feasibility Report
+        "Budget":     "budget",   # budget xlsx has its own label now
         "SCA":        "sca",
         "Timeline":   "timeline",
         "Deal Notes": "deal_notes",
@@ -1130,6 +1290,9 @@ async def generate_genesis_field_goldens(
     def _context_for_field(field: dict, max_chars: int = 8000) -> str:
         label = label_map.get(field.get("expected_doc", ""), None)
         source = (doc_text_by_label.get(label, "") if label else combined_clean).strip()
+        # If budget label is empty (no xlsx uploaded), fall back to trinity
+        if not source and label == "budget":
+            source = doc_text_by_label.get("trinity", combined_clean).strip()
         if not source:
             source = combined_clean
         return source[:max_chars]
@@ -1232,12 +1395,15 @@ async def generate_genesis_field_goldens(
     tasks = [_run_batch(i, ctx, batch) for i, (ctx, batch) in enumerate(batches)]
     results = await asyncio.gather(*tasks)
 
-    # Best-answer-wins merge
-    extracted_values: dict = {}
+    # Seed extracted_values with xlsx + timeline derived values before LLM batches run.
+    # These are protected — LLM results cannot overwrite them.
+    extracted_values: dict = dict(_all_seeds)
     for batch_result in results:
         for k, v in batch_result.items():
             if v and v != "NOT_FOUND":
-                extracted_values[k] = v
+                # Don't overwrite a reliable xlsx-sourced value with an LLM guess
+                if k not in _all_seeds:
+                    extracted_values[k] = v
             elif k not in extracted_values:
                 extracted_values[k] = v
 
@@ -1317,19 +1483,22 @@ async def generate_genesis_field_goldens(
                 result = f"{_fmt_money(contingency)} / {_fmt_money(rehab)} = {_fmt_pct(pct)} (holdback not found, used rehab)"
 
         elif fname == "Project Complete Percentage":
-            # Extract days-elapsed from Project Timeline To Date field
-            # Expected format: "392 days (13.1 months)"
-            days_match = _re.search(r"(\d+)\s*days", start_str or "")
-            rem_match  = _re.search(r"(\d+)\s*days", end_str or "")
-            if days_match and rem_match:
-                elapsed = int(days_match.group(1))
-                remaining = int(rem_match.group(1))
-                total = elapsed + remaining
-                if total > 0:
-                    pct = elapsed / total * 100
-                    result = f"{elapsed} / ({elapsed} + {remaining}) = {_fmt_pct(pct)}"
+            # Skip if already computed by _extract_from_timeline_text
+            if fname in _all_seeds:
+                result = _all_seeds[fname]
             else:
-                result = "NOT_FOUND (timeline dates not extracted)"
+                # Fallback: derive from Project Timeline To Date and Remaining Timeline
+                days_match = _re.search(r"(\d+)\s*days", start_str or "")
+                rem_match  = _re.search(r"(\d+)\s*days", end_str or "")
+                if days_match and rem_match:
+                    elapsed = int(days_match.group(1))
+                    remaining = int(rem_match.group(1))
+                    total = elapsed + remaining
+                    if total > 0:
+                        pct = elapsed / total * 100
+                        result = f"{elapsed} / ({elapsed} + {remaining}) = {_fmt_pct(pct)}"
+                else:
+                    result = "NOT_FOUND (timeline dates not extracted)"
 
         extracted_values[fname] = result
 
@@ -1620,6 +1789,27 @@ def extract_document_text(file_bytes: bytes, filename: str) -> str:
                 if visual_description:
                     text_content += f"--- VISUAL & DIAGRAM DESCRIPTION ---\n{visual_description}\n"
                 text_content += "\n"
+        elif filename.lower().endswith(".xlsx"):
+            # Read xlsx with openpyxl and extract structured text from all sheets.
+            # Specifically looks for header rows containing CLIENT/Borrower/Sponsor
+            # labels in the first 10 rows — these map to Genesis Borrower Entity field.
+            try:
+                import openpyxl as _openpyxl
+                import io as _io
+                wb = _openpyxl.load_workbook(_io.BytesIO(file_bytes), data_only=True)
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    text_content += f"[SHEET: {sheet_name}]\n"
+                    # Extract all non-empty rows, up to 200 rows per sheet
+                    for row in ws.iter_rows(max_row=200, values_only=True):
+                        cells = [str(c).strip() if c is not None else "" for c in row]
+                        non_empty = [c for c in cells if c]
+                        if non_empty:
+                            text_content += " | ".join(cells) + "\n"
+                    text_content += "\n"
+            except Exception as xlsx_err:
+                print(f"[xlsx] openpyxl extraction failed for {filename}: {xlsx_err}")
+                text_content = file_bytes.decode("utf-8", errors="ignore")
         else:
             text_content = file_bytes.decode("utf-8", errors="ignore")
     except Exception as e:
@@ -2459,7 +2649,7 @@ async def generate_qa_testcases(
     sample_json: str = Form(...),
     test_case_count: int = Form(20),
     genesis_mode: bool = Form(False),
-    genesis_field_count: int = Form(32),  # 10, 20, or 32 (all)
+    genesis_field_count: int = Form(31),  # 10, 20, or 31 (all)
 ):
     if not genesis_mode and test_case_count not in ALLOWED_TEST_CASE_COUNTS:
         raise HTTPException(
@@ -2537,7 +2727,7 @@ async def _generate_impl(
     if genesis_mode:
         # Genesis field-targeted mode: one golden per testable field (32 total).
         # Skips the generic DeepEval Synthesizer and directly queries the LLM
-        # for each of the 32 extractable/calculable Genesis fields.
+        # for each of the 31 extractable/calculable Genesis fields.
         n = min(max(genesis_field_count, 1), len(GENESIS_FIELDS))
         print(f"[Generate] Genesis mode: generating {n} field-targeted goldens (of {len(GENESIS_FIELDS)} total)...")
         golden_items, generated_json = await generate_genesis_field_goldens(
