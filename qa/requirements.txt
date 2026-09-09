@@ -12,3 +12,5 @@ chromadb
 python-docx
 openpyxl
 extract-msg
+pillow
+groq

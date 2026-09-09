@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & secrets
+.env
+env
+.venv/
+venv/
+ENV/
+
+# Database files & caches
+*.db
+*.sqlite3
+qa_sessions.db
+.deepeval/
+*.cache/
+
+# Git & IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Logs & temp
+*.log
+*.tmp
