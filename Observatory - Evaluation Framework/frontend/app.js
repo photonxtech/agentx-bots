@@ -412,6 +412,8 @@ async function handleFileUpload(files) {
     list.forEach(f => formData.append('files', f));
 
     try {
+        const uploadStart = Date.now();
+        console.log('[UPLOAD] Starting upload of', list.length, 'file(s)');
         showToast(`Uploading ${list.length} file(s)…`, 'info');
         const res = await fetch(`${API}/api/sessions/${activeSessionId}/upload`, {
             method: 'POST',
@@ -419,13 +421,22 @@ async function handleFileUpload(files) {
             // 10 min timeout for large multi-document packages
             signal: AbortSignal.timeout(600000),
         });
+        console.log('[UPLOAD] Fetch completed in', (Date.now() - uploadStart) / 1000, 'seconds');
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || `Upload failed (${res.status})`);
         }
         const result = await res.json();
+        console.log('[UPLOAD] Response parsed, updating UI...');
 
+        // Immediately apply documents BEFORE any other operations
         applyDocuments(result.documents || []);
+        console.log('[UPLOAD] UI updated in', (Date.now() - uploadStart) / 1000, 'seconds total');
+        
+        // Force UI refresh
+        if (activeSessionData) {
+            activeSessionData.documents = result.documents || [];
+        }
 
         if (result.skipped && result.skipped.length) {
             showToast(`Skipped: ${result.skipped.join('; ')}`, 'info');
