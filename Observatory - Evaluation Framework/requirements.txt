@@ -58,6 +58,10 @@ httpx==0.28.1
 python-dotenv==1.2.2
 pandas==3.0.5
 
+# ── Google Gemini API ─────────────────────────────────────────────────────
+# For Q&A Generation using Google's Gemini models
+google-generativeai==0.8.3
+
 # Model weights are downloaded on first use and cached by fastembed, so the
 # first run with a newly selected embedding/reranker model is slower.
 openpyxl

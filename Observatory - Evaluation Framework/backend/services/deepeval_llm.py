@@ -37,7 +37,11 @@ GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 NVIDIA_BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
-# Nvidia NIM configuration (Priority 1 for Q&A Generation and Metrics Evaluation)
+# Google Gemini configuration (Priority 1 for Q&A Generation)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+
+# Nvidia NIM configuration (Priority 2 for Q&A Generation and Metrics Evaluation)
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "moonshotai/kimi-k3")
 
@@ -115,6 +119,12 @@ def _model_chain(primary: str) -> list[str]:
 
 def groq_ready() -> bool:
     return key_pool_size() > 0
+
+
+def gemini_ready() -> bool:
+    """Check if Gemini API key is configured."""
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    return bool(key and not key.startswith("your_"))
 
 
 def nvidia_ready() -> bool:
@@ -501,17 +511,29 @@ def build_generator_llm():
     """Return the best available LLM for Q&A generation (Synthesizer use only).
 
     Priority:
-      1. Nvidia NIM (NVIDIA_API_KEY with moonshotai/kimi-k3) — Priority 1
-      2. AIHubMix (Premium key) — when PREFER_AIHUBMIX=1 is set
-      3. OpenAI (OPENAI_API_KEY) — fast, reliable
-      4. Groq direct — fast, reliable, 3 API keys with rotation
-      5. OmniRoute gateway — when LLM_GATEWAY_URL is set and gateway responds
-      6. OpenRouter Nvidia — only when PREFER_OPENROUTER=1 is set
+      1. Google Gemini (GEMINI_API_KEY) — Priority 1, latest Google models
+      2. Nvidia NIM (NVIDIA_API_KEY with moonshotai/kimi-k3) — Priority 2
+      3. AIHubMix (Premium key) — when PREFER_AIHUBMIX=1 is set
+      4. OpenAI (OPENAI_API_KEY) — fast, reliable
+      5. Groq direct — fast, reliable, 3 API keys with rotation
+      6. OmniRoute gateway — when LLM_GATEWAY_URL is set and gateway responds
+      7. OpenRouter Nvidia — only when PREFER_OPENROUTER=1 is set
 
     NEVER pass the result of this function to the DeepEval judge / metrics.
     For scoring always use build_groq_judge() so runs stay comparable.
     """
-    # ── Priority 1: Nvidia NIM override ──────────────────────────────────────
+    # ── Priority 1: Google Gemini override ───────────────────────────────────
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp").strip()
+    if gemini_key and not gemini_key.startswith("your_"):
+        try:
+            llm = build_gemini_llm(gemini_key, gemini_model)
+            logger.info("Q&A generation: using Google Gemini (Priority 1) with model '%s'", gemini_model)
+            return llm
+        except Exception as e:
+            logger.warning("Gemini provider failed: %s - Trying Nvidia NIM...", str(e)[:100])
+
+    # ── Priority 2: Nvidia NIM override ──────────────────────────────────────
     nvidia_slots = []
     k1 = os.getenv("NVIDIA_API_KEY", "").strip()
     if k1 and not k1.startswith("your_"):
@@ -1279,3 +1301,144 @@ def build_nvidia_llm(
 
     return NvidiaLLM(normalized_slots)
 
+
+def build_gemini_llm(api_key: str, model_name: str):
+    """Build a DeepEval-compatible LLM wrapper for Google Gemini API.
+    
+    Uses the google-generativeai Python SDK to call Gemini models.
+    Supports schema-based generation for DeepEval's structured outputs.
+    """
+    import time
+    from deepeval.models import DeepEvalBaseLLM
+    
+    class GeminiLLM(DeepEvalBaseLLM):
+        def __init__(self, api_key: str, model: str):
+            self._gemini_model = model
+            self.api_key = api_key
+            self._model = None
+            super().__init__(model=model)
+        
+        def load_model(self):
+            """Required by DeepEvalBaseLLM - called during initialization."""
+            return None
+        
+        def get_model_name(self) -> str:
+            """Required by DeepEvalBaseLLM."""
+            return self._gemini_model or getattr(self, 'model', None) or "gemini-2.0-flash-exp"
+        
+        def _get_model(self):
+            """Lazy model initialization to avoid serialization issues."""
+            if self._model is None:
+                try:
+                    import google.generativeai as genai
+                    genai.configure(api_key=self.api_key)
+                    self._model = genai.GenerativeModel(self._gemini_model)
+                except ImportError:
+                    raise RuntimeError(
+                        "google-generativeai package not installed. "
+                        "Install it with: pip install google-generativeai"
+                    )
+            return self._model
+        
+        @staticmethod
+        def _parse_response(raw: str, schema):
+            """Parse and validate response against schema if provided."""
+            if schema is not None:
+                import re
+                # Remove markdown code blocks if present
+                match = re.search(r'```json\s*(.*?)\s*```', raw, re.DOTALL)
+                if match:
+                    raw = match.group(1)
+                return schema.model_validate_json(raw)
+            return raw
+        
+        def generate(self, prompt: str, schema: type = None):
+            """Synchronous generation with Gemini API."""
+            model = self._get_model()
+            model_to_use = self._gemini_model or "gemini-2.0-flash-exp"
+            
+            full_prompt = prompt
+            if schema is not None:
+                full_prompt += (
+                    f"\n\nIMPORTANT: Respond with a single valid JSON object and nothing else. "
+                    f"The JSON must validate against this schema:\n"
+                    f"{schema.model_json_schema()}\n\n"
+                    f"Do not include any markdown formatting, explanations, or additional text. "
+                    f"Only return the JSON object."
+                )
+            
+            try:
+                logger.info("Gemini sync generate using model: %s", model_to_use)
+                
+                # Configure generation parameters
+                generation_config = {
+                    "temperature": 0.7,
+                    "max_output_tokens": 2048,
+                }
+                
+                # For schema-based generation, request JSON output
+                if schema is not None:
+                    generation_config["response_mime_type"] = "application/json"
+                
+                response = model.generate_content(
+                    full_prompt,
+                    generation_config=generation_config,
+                )
+                
+                raw = response.text
+                logger.info("Gemini generated %d chars", len(raw))
+                return self._parse_response(raw, schema)
+                
+            except Exception as e:
+                logger.error("Gemini generation failed: %s: %s", type(e).__name__, str(e)[:120])
+                raise
+        
+        async def a_generate(self, prompt: str, schema: type = None):
+            """Async generation with Gemini API."""
+            import asyncio
+            
+            model = self._get_model()
+            model_to_use = self._gemini_model or "gemini-2.0-flash-exp"
+            
+            full_prompt = prompt
+            if schema is not None:
+                full_prompt += (
+                    f"\n\nIMPORTANT: Respond with a single valid JSON object and nothing else. "
+                    f"The JSON must validate against this schema:\n"
+                    f"{schema.model_json_schema()}\n\n"
+                    f"Do not include any markdown formatting, explanations, or additional text. "
+                    f"Only return the JSON object."
+                )
+            
+            try:
+                logger.info(
+                    "Calling Gemini with model=%s, prompt_len=%d",
+                    model_to_use, len(full_prompt),
+                )
+                
+                # Configure generation parameters
+                generation_config = {
+                    "temperature": 0.7,
+                    "max_output_tokens": 2048,
+                }
+                
+                # For schema-based generation, request JSON output
+                if schema is not None:
+                    generation_config["response_mime_type"] = "application/json"
+                
+                # Run in thread pool to avoid blocking
+                response = await asyncio.to_thread(
+                    model.generate_content,
+                    full_prompt,
+                    generation_config=generation_config,
+                )
+                
+                raw = response.text
+                logger.info("Gemini async generated %d chars", len(raw))
+                return self._parse_response(raw, schema)
+                
+            except Exception as e:
+                logger.error("Gemini async generation failed: %s: %s", type(e).__name__, str(e)[:120])
+                raise
+    
+    return GeminiLLM(api_key=api_key, model=model_name)
