@@ -2,6 +2,10 @@
 # Python 3.14 is NOT supported: ragas needs the langchain 0.3.x line, which
 # depends on the pydantic-v1 compatibility shim that breaks on Python >= 3.14.
 
+# ── Build & Environment Tools ─────────────────────────────────────────────
+setuptools
+wheel
+
 # ── Web / API ─────────────────────────────────────────────────────────────
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
@@ -24,6 +28,8 @@ msoffcrypto-tool==6.0.0
 # ── RAG pipeline (chunk -> embed -> index -> retrieve -> rerank) ──────────
 # fastembed provides both the embedding models and the ONNX cross-encoder
 # rerankers, so reranking works with no torch and no FlagEmbedding.
+# numpy<2.0.0 is pinned to prevent numpy 2.x binary C-extension breakage on Windows.
+numpy<2.0.0
 fastembed==0.8.0
 chromadb==1.5.9
 rank-bm25==0.2.2
@@ -64,4 +70,4 @@ google-generativeai==0.8.3
 
 # Model weights are downloaded on first use and cached by fastembed, so the
 # first run with a newly selected embedding/reranker model is slower.
-openpyxl
+

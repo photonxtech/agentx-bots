@@ -1,0 +1,15 @@
+venv
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+.git
+.gitignore
+.deepeval
+.rag_index_cache
+uploads
+rag_eval.db
+*.log
