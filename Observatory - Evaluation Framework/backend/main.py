@@ -86,6 +86,12 @@ def healthz():
     return {"status": "ok"}
 
 
+@app.get("/test", include_in_schema=False)
+def test_endpoint():
+    """Simple test endpoint to verify the server is responding."""
+    return {"message": "Server is working!", "timestamp": __import__('datetime').datetime.now().isoformat()}
+
+
 @app.get("/readyz", include_in_schema=False)
 def readyz():
     """Readiness probe — reports whether dependencies are actually usable."""
