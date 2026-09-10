@@ -122,9 +122,9 @@ def groq_ready() -> bool:
 
 
 def gemini_ready() -> bool:
-    """Check if Gemini API key is configured."""
+    """Check if Gemini API key is configured and looks valid."""
     key = os.getenv("GEMINI_API_KEY", "").strip()
-    return bool(key and not key.startswith("your_"))
+    return bool(key and len(key) > 10 and not key.startswith("your_"))
 
 
 def nvidia_ready() -> bool:
@@ -525,11 +525,15 @@ def build_generator_llm():
     # ── Priority 1: Google Gemini override ───────────────────────────────────
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp").strip()
-    if gemini_key and not gemini_key.startswith("your_"):
+    # Only try Gemini if key is present and looks valid (not empty, not placeholder)
+    if gemini_key and len(gemini_key) > 10 and not gemini_key.startswith("your_"):
         try:
             llm = build_gemini_llm(gemini_key, gemini_model)
             logger.info("Q&A generation: using Google Gemini (Priority 1) with model '%s'", gemini_model)
             return llm
+        except RuntimeError as e:
+            # Python 3.14 compatibility error or missing package
+            logger.warning("Gemini provider not available: %s - Trying Nvidia NIM...", str(e)[:200])
         except Exception as e:
             logger.warning("Gemini provider failed: %s - Trying Nvidia NIM...", str(e)[:100])
 
@@ -1307,9 +1311,19 @@ def build_gemini_llm(api_key: str, model_name: str):
     
     Uses the google-generativeai Python SDK to call Gemini models.
     Supports schema-based generation for DeepEval's structured outputs.
+    
+    NOTE: Requires Python < 3.14 due to protobuf compatibility.
     """
     import time
     from deepeval.models import DeepEvalBaseLLM
+    
+    # Check Python version compatibility
+    import sys
+    if sys.version_info >= (3, 14):
+        raise RuntimeError(
+            "Google Generative AI SDK is not compatible with Python 3.14+. "
+            "Please use Python 3.12 or earlier, or use alternative providers (Nvidia NIM, OpenAI, Groq)."
+        )
     
     class GeminiLLM(DeepEvalBaseLLM):
         def __init__(self, api_key: str, model: str):
