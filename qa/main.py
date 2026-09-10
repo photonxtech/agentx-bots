@@ -118,6 +118,8 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from groq import Groq
+from google import genai as _genai_sdk
+from google.genai import types as _genai_types
 
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics import (
@@ -133,19 +135,23 @@ from deepeval.synthesizer import Synthesizer
 from deepeval.synthesizer.config import EvolutionConfig
 from deepeval.synthesizer.types import Evolution
 
-app = FastAPI(title="QA Generator with Vision Model & Split DeepEval via Groq")
+app = FastAPI(title="QA Generator with Vision Model & Split DeepEval")
 
-@app.get("/api/status")
-@app.get("/health")
-def health_check():
-    return {"status": "ok", "service": "qa-generator"}
+# ═══════════════════════════════════════════════════════════════════════════════
+# Provider auto-detection
+# ───────────────────────────────────────────────────────────────────────────────
+# Gemini is used if GEMINI_API_KEY is set in .env.
+# Groq is used if any GROQ_API_KEY / GROQ_API_KEY_1..10 / GROQ_API_KEYS is set.
+# Gemini takes priority if both are present.
+# Switch providers simply by commenting/uncommenting the relevant key in .env.
+# ═══════════════════════════════════════════════════════════════════════════════
 
+# ── Groq key pool ─────────────────────────────────────────────────────────────
 def _load_groq_api_keys() -> List[str]:
     """Collects Groq API keys from any of:
-    - GROQ_API_KEYS="key1,key2,key3,key4,key5" (comma-separated, recommended
-      for several free-tier accounts)
+    - GROQ_API_KEYS="key1,key2,key3" (comma-separated)
     - GROQ_API_KEY_1 .. GROQ_API_KEY_10 (one env var per key)
-    - GROQ_API_KEY (single key, kept for backwards compatibility)
+    - GROQ_API_KEY (single key, backwards compatible)
     Order is preserved and duplicates are dropped."""
     keys: List[str] = []
     multi = os.getenv("GROQ_API_KEYS", "")
@@ -158,24 +164,19 @@ def _load_groq_api_keys() -> List[str]:
     single = os.getenv("GROQ_API_KEY")
     if single and single.strip():
         keys.append(single.strip())
-    seen = set()
-    unique_keys = []
+    seen: set = set()
+    unique: List[str] = []
     for k in keys:
         if k not in seen:
             seen.add(k)
-            unique_keys.append(k)
-    return unique_keys
+            unique.append(k)
+    return unique
 
 
 class GroqKeyPool:
-    """Round-robins across several Groq API keys (e.g. from different
-    free-tier accounts). Every call site in this file goes through
-    generate_content_with_key_rotation() below instead of talking to a single
-    Groq directly, so the instant one key hits a rate limit, the very
-    next request (and the retry of the one that just failed) transparently
-    uses the next key — looping back around to the first key once every key
-    has been tried. A short per-key cooldown avoids immediately re-picking a
-    key that *just* rate-limited, even on unrelated concurrent calls."""
+    """Round-robins across several Groq API keys. Every call site goes through
+    generate_content_with_key_rotation() so the instant one key hits a rate
+    limit the next request transparently uses the next key."""
 
     def __init__(self, api_keys: List[str]):
         if not api_keys:
@@ -195,9 +196,6 @@ class GroqKeyPool:
             return self._clients[self._current], self._current
 
     def rotate(self, from_index: int, cooldown_seconds: float = 60.0):
-        """Marks from_index as cooling down and switches to the next key that
-        isn't currently cooling down (or just the next one in line if every
-        key is cooling down — better to retry a cooling key than get stuck)."""
         with self._lock:
             self._cooldown_until[from_index] = time.time() + cooldown_seconds
             n = len(self._clients)
@@ -216,20 +214,51 @@ class GroqKeyPool:
     def num_keys(self) -> int:
         return len(self._clients)
 
+# ── Provider detection & client initialisation ────────────────────────────────
+_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+_groq_keys      = _load_groq_api_keys()
 
-_groq_keys = _load_groq_api_keys()
-groq_pool = GroqKeyPool(_groq_keys) if _groq_keys else None
-# Kept around only for simple truthiness checks / anything expecting a client
-# object directly; actual requests always go through generate_content_with_key_rotation.
-groq_client = groq_pool.current_client()[0] if groq_pool else None
+if _GEMINI_API_KEY:
+    LLM_PROVIDER    = "gemini"
+    _gemini_client  = _genai_sdk.Client(api_key=_GEMINI_API_KEY)
+    groq_pool       = None          # not used
+    groq_client     = None
+    _PROVIDER_TPM   = int(os.getenv("DEFAULT_TPM", "4000000"))   # paid — no throttle
+elif _groq_keys:
+    LLM_PROVIDER    = "groq"
+    _gemini_client  = None
+    groq_pool       = GroqKeyPool(_groq_keys)
+    groq_client     = groq_pool.current_client()[0]
+    _PROVIDER_TPM   = int(os.getenv("DEFAULT_TPM", "200000"))    # free tier — throttle
+else:
+    LLM_PROVIDER    = "none"
+    _gemini_client  = None
+    groq_pool       = None
+    groq_client     = None
+    _PROVIDER_TPM   = 200000
+
+print(f"[Provider] LLM_PROVIDER={LLM_PROVIDER}  TPM={_PROVIDER_TPM:,}")
+
+# Unified readiness check used by all endpoints
+def _llm_ready() -> bool:
+    return LLM_PROVIDER != "none"
+# ─────────────────────────────────────────────────────────────────────────────
+
 DB_FILE = "qa_sessions.db"
 
-# Model Configuration
-GENERATION_MODEL = os.getenv("GENERATION_MODEL", "openai/gpt-oss-120b")
-VISION_MODEL = os.getenv("VISION_MODEL", "qwen/qwen3.6-27b")  # Groq multimodal model
-GEVAL_JUDGE_MODEL = os.getenv("GEVAL_JUDGE_MODEL", "openai/gpt-oss-120b")
-RAG_JUDGE_MODEL = os.getenv("RAG_JUDGE_MODEL", "openai/gpt-oss-120b")
-SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL", "openai/gpt-oss-120b")
+# Model Configuration — auto-selected based on provider, overridable via .env
+if LLM_PROVIDER == "gemini":
+    GENERATION_MODEL  = os.getenv("GENERATION_MODEL",  "gemini-2.5-flash")
+    VISION_MODEL      = os.getenv("VISION_MODEL",       "gemini-2.5-flash")
+    GEVAL_JUDGE_MODEL = os.getenv("GEVAL_JUDGE_MODEL",  "gemini-2.5-flash")
+    RAG_JUDGE_MODEL   = os.getenv("RAG_JUDGE_MODEL",    "gemini-2.5-flash")
+    SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL",  "gemini-2.5-flash")
+else:  # groq
+    GENERATION_MODEL  = os.getenv("GENERATION_MODEL",  "openai/gpt-oss-120b")
+    VISION_MODEL      = os.getenv("VISION_MODEL",       "qwen/qwen3.6-27b")
+    GEVAL_JUDGE_MODEL = os.getenv("GEVAL_JUDGE_MODEL",  "openai/gpt-oss-120b")
+    RAG_JUDGE_MODEL   = os.getenv("RAG_JUDGE_MODEL",    "openai/gpt-oss-120b")
+    SYNTHESIZER_MODEL = os.getenv("SYNTHESIZER_MODEL",  "openai/gpt-oss-120b")
 
 EVAL_CONCURRENCY_LIMIT = int(os.getenv("EVAL_CONCURRENCY", "3"))
 _eval_semaphore = asyncio.Semaphore(EVAL_CONCURRENCY_LIMIT)
@@ -303,8 +332,8 @@ def get_rate_limiter(model_name: str) -> "TokenRateLimiter":
     with _rate_limiter_registry_lock:
         limiter = _rate_limiters.get(model_name)
         if limiter is None:
-            default_tpm = int(os.getenv("DEFAULT_TPM", "200000"))
-            tpm = int(os.getenv(_tpm_env_key(model_name), str(default_tpm)))
+            # Use provider-appropriate TPM — Gemini paid is 4M, Groq free is 200k
+            tpm = int(os.getenv(_tpm_env_key(model_name), str(_PROVIDER_TPM)))
             limiter = TokenRateLimiter(tpm)
             _rate_limiters[model_name] = limiter
         return limiter
@@ -1321,14 +1350,28 @@ async def generate_genesis_field_goldens(
         "10. Return a JSON object: each key = exact field_name, each value = extracted string."
     )
 
+    # ── Special fields that need full PDF context ─────────────────────────────
+    # These 3 dropdown fields consistently return wrong answers when the trinity
+    # doc is split into 3 parts, because their answers sit in specific sections
+    # that may not appear in the part they happen to be assigned to.
+    # Solution: pull them out of the normal trinity group entirely and give them
+    # their own batch with the FULL clean trinity text — no splitting.
+    # Every other field's existing logic is completely unchanged.
+    FULL_CONTEXT_FIELDS = {"Third-Party Review", "Plan Status", "Plan Review Status"}
+
     # ── Group fields by their source document label ──────────────────────────
     groups: dict = {}
     formula_fields = []
+    full_context_field_list = []   # the 3 special fields
+
     for f in active_fields:
         if f["type"] == "date":
             continue
         if f["type"] == "calculated":
             formula_fields.append(f)
+            continue
+        if f["field_name"] in FULL_CONTEXT_FIELDS:
+            full_context_field_list.append(f)
             continue
         lbl = label_map.get(f.get("expected_doc", ""), "combined")
         groups.setdefault(lbl, []).append(f)
@@ -1353,6 +1396,12 @@ async def generate_genesis_field_goldens(
             for part in parts:
                 for i in range(0, len(fields), MAX_FIELDS):
                     batches.append((part, fields[i:i + MAX_FIELDS]))
+
+    # Add the 3 special fields as one separate batch with the FULL trinity text.
+    # No splitting, no parallel parts — just the complete document in one call.
+    if full_context_field_list:
+        full_trinity_text = doc_text_by_label.get("trinity", combined_clean).strip() or combined_clean
+        batches.append((full_trinity_text, full_context_field_list))
 
     print(f"[Genesis QA] {len(batches)} parallel LLM calls + {len(formula_fields)} Python formula fields")
 
@@ -1580,14 +1629,50 @@ def _is_rate_limit_error(e: Exception) -> bool:
     return "429" in text or "resource_exhausted" in text or "rate limit" in text or "quota" in text
 
 
+# ── Groq message builder (commented out — using Gemini) ──────────────────────
+# def _build_groq_messages(contents, config=None):
+#     system_instruction = None
+#     if config:
+#         system_instruction = config.get("system_instruction")
+#     messages = []
+#     if system_instruction:
+#         messages.append({"role": "system", "content": system_instruction})
+#     if isinstance(contents, list):
+#         parts = []
+#         for item in contents:
+#             if isinstance(item, str):
+#                 parts.append({"type": "text", "text": item})
+#             elif isinstance(item, bytes):
+#                 encoded = base64.b64encode(item).decode("utf-8")
+#                 parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
+#             else:
+#                 parts.append({"type": "text", "text": str(item)})
+#         messages.append({"role": "user", "content": parts})
+#     else:
+#         messages.append({"role": "user", "content": str(contents)})
+#     return messages
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_gemini_parts(contents, config=None):
+    """Convert mixed text/bytes contents into Gemini Part objects."""
+    system_instruction = (config or {}).get("system_instruction")
+    parts = []
+    if system_instruction:
+        parts.append(_genai_types.Part.from_text(text=system_instruction + "\n\n"))
+    if isinstance(contents, list):
+        for item in contents:
+            if isinstance(item, bytes):
+                parts.append(_genai_types.Part.from_bytes(data=item, mime_type="image/png"))
+            else:
+                parts.append(_genai_types.Part.from_text(text=str(item)))
+    else:
+        parts.append(_genai_types.Part.from_text(text=str(contents)))
+    return parts
+
+
+# ── Groq message builder ─────────────────────────────────────────────────────
 def _build_groq_messages(contents, config=None):
-    system_instruction = None
-    temperature = None
-    response_format = None
-    if config:
-        system_instruction = config.get("system_instruction")
-        temperature = config.get("temperature")
-        response_format = config.get("response_format")
+    system_instruction = (config or {}).get("system_instruction")
     messages = []
     if system_instruction:
         messages.append({"role": "system", "content": system_instruction})
@@ -1598,10 +1683,7 @@ def _build_groq_messages(contents, config=None):
                 parts.append({"type": "text", "text": item})
             elif isinstance(item, bytes):
                 encoded = base64.b64encode(item).decode("utf-8")
-                parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{encoded}"}
-                })
+                parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
             else:
                 parts.append({"type": "text", "text": str(item)})
         messages.append({"role": "user", "content": parts})
@@ -1609,126 +1691,160 @@ def _build_groq_messages(contents, config=None):
         messages.append({"role": "user", "content": str(contents)})
     return messages
 
+
+# ── Groq generate_content_with_key_rotation (commented out) ──────────────────
+# def generate_content_with_key_rotation(model, contents, config=None, cooldown_seconds=60.0):
+#     """Original Groq key-rotation implementation — kept for reference."""
+#     if not groq_pool:
+#         raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+#     n = groq_pool.num_keys()
+#     last_err = None
+#     for _ in range(n):
+#         client, idx = groq_pool.current_client()
+#         try:
+#             request_kwargs = dict(config or {})
+#             request_kwargs.pop("system_instruction", None)
+#             request_kwargs.pop("response_mime_type", None)
+#             return client.chat.completions.create(
+#                 model=model, messages=_build_groq_messages(contents, config), **request_kwargs)
+#         except Exception as e:
+#             last_err = e
+#             if _is_rate_limit_error(e):
+#                 groq_pool.rotate(idx, cooldown_seconds=cooldown_seconds); continue
+#             raise
+#     raise last_err
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _GeminiResponse:
+    """Wraps a Gemini response to expose the same .choices[0].message.content
+    interface that all call sites currently expect from Groq responses."""
+    def __init__(self, text: str):
+        self._text = text
+    class _Msg:
+        def __init__(self, t): self.content = t
+    class _Choice:
+        def __init__(self, t): self.message = _GeminiResponse._Msg(t)
+    @property
+    def choices(self):
+        return [self._Choice(self._text)]
+
+
 def generate_content_with_key_rotation(model: str, contents, config=None, cooldown_seconds: float = 60.0):
-    """The single choke point every Groq call in this file goes through.
-    Tries the pool's currently active key; if that key comes back rate
-    limited, immediately rotates to the next key and retries the SAME
-    request — looping through every configured key (multiple free-tier
-    accounts) before giving up. Non-rate-limit errors are raised straight
-    away so callers' own retry/backoff logic (transient 5xx, etc.) still
-    applies on top of this."""
-    if not groq_pool:
-        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+    """Single choke-point for all LLM calls.
+    Routes to Gemini or Groq based on LLM_PROVIDER detected at startup."""
+    if not _llm_ready():
+        raise HTTPException(status_code=500, detail="No LLM API key configured (set GEMINI_API_KEY or GROQ_API_KEY).")
 
-    n = groq_pool.num_keys()
-    last_err = None
-    # Try every key at most once per call; if even a full loop through all
-    # keys is rate limited, let the error bubble up to the caller's own
-    # retry/backoff loop rather than spinning here.
-    for _ in range(n):
-        client, idx = groq_pool.current_client()
-        try:
-            request_kwargs = dict(config or {})
-            request_kwargs.pop("system_instruction", None)
-            request_kwargs.pop("response_mime_type", None)
-            return client.chat.completions.create(
-                model=model,
-                messages=_build_groq_messages(contents, config),
-                **request_kwargs
-            )
-        except Exception as e:
-            last_err = e
-            if _is_rate_limit_error(e):
-                groq_pool.rotate(idx, cooldown_seconds=cooldown_seconds)
-                continue
-            raise
-    raise last_err
+    if LLM_PROVIDER == "gemini":
+        # ── Gemini path ───────────────────────────────────────────────────────
+        cfg = config or {}
+        wants_json = (cfg.get("response_format", {}) or {}).get("type") == "json_object"
+        temperature = cfg.get("temperature", 0.0)
+        gemini_config = _genai_types.GenerateContentConfig(
+            temperature=temperature,
+            response_mime_type="application/json" if wants_json else "text/plain",
+        )
+        parts = _build_gemini_parts(contents, cfg)
+        max_retries = 4
+        base_delay = 3.0
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                response = _gemini_client.models.generate_content(
+                    model=model,
+                    contents=parts,
+                    config=gemini_config,
+                )
+                text = response.text or ""
+                fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL | re.IGNORECASE)
+                if fence:
+                    text = fence.group(1).strip()
+                return _GeminiResponse(text)
+            except Exception as e:
+                last_err = e
+                if _is_rate_limit_error(e) and attempt < max_retries - 1:
+                    wait = base_delay * (attempt + 1)
+                    print(f"[Gemini] Rate limit on attempt {attempt+1}, retrying in {wait:.1f}s...")
+                    time.sleep(wait)
+                    continue
+                raise
+        raise last_err
+
+    else:
+        # ── Groq path ─────────────────────────────────────────────────────────
+        n = groq_pool.num_keys()
+        last_err = None
+        for _ in range(n):
+            client, idx = groq_pool.current_client()
+            try:
+                request_kwargs = dict(config or {})
+                request_kwargs.pop("system_instruction", None)
+                request_kwargs.pop("response_mime_type", None)
+                return client.chat.completions.create(
+                    model=model,
+                    messages=_build_groq_messages(contents, config),
+                    **request_kwargs
+                )
+            except Exception as e:
+                last_err = e
+                if _is_rate_limit_error(e):
+                    groq_pool.rotate(idx, cooldown_seconds=cooldown_seconds)
+                    continue
+                raise
+        raise last_err
 
 
-# --- Custom Groq Evaluator ---
+# ── Groq Evaluator LLM (commented out — using Gemini) ────────────────────────
+# class GroqEvaluatorLLM(DeepEvalBaseLLM):
+#     def __init__(self, model_name="openai/gpt-oss-120b"):
+#         self.model_name = model_name
+#     def load_model(self): return groq_pool
+#     def generate(self, prompt: str) -> str: ...  # (full impl removed for brevity)
+#     async def a_generate(self, prompt: str) -> str:
+#         async with _eval_semaphore:
+#             return await asyncio.to_thread(self.generate, prompt)
+#     def get_model_name(self): return self.model_name
+# ─────────────────────────────────────────────────────────────────────────────
+
 class GroqEvaluatorLLM(DeepEvalBaseLLM):
-    def __init__(self, model_name="openai/gpt-oss-120b"):
+    """DeepEval judge LLM — now backed by Gemini 2.5 Flash.
+    Class name kept as GroqEvaluatorLLM so all instantiation sites need no changes."""
+
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
         self.model_name = model_name
 
     def load_model(self):
-        return groq_pool
+        return _gemini_client
 
     def generate(self, prompt: str) -> str:
-        # DeepEval's metric templates put the "respond ONLY with this JSON
-        # schema" instructions at the END of the prompt (after the
-        # context/question). Blindly slicing prompt[:4000] chopped that tail
-        # off, so the judge model never saw the JSON instructions and replied
-        # in plain text -> "Evaluation LLM outputted an invalid JSON".
-        # Fix: only truncate if we actually need to, and when we do, cut
-        # from the MIDDLE (keep the head with task setup and the tail with
-        # the output-format spec, which DeepEval always needs intact).
-        # Keep the actual request comfortably below Groq's 8,000 TPM limit.
-        # DeepEval adds its own instructions/schema around the supplied prompt,
-        # so the source prompt must be kept well below the provider limit.
-        max_chars = 6000
+        max_chars = 30000 if LLM_PROVIDER == "gemini" else 6000
         if len(prompt) > max_chars:
             head_len = int(max_chars * 0.6)
             tail_len = max_chars - head_len
-            truncated_prompt = (
-                prompt[:head_len]
-                + "\n...[truncated]...\n"
-                + prompt[-tail_len:]
-            )
-        else:
-            truncated_prompt = prompt
-        max_retries = 5
+            prompt = (prompt[:head_len] + "\n...[truncated]...\n" + prompt[-tail_len:])
+
+        max_retries = 4
         base_delay = 3.0
         limiter = get_rate_limiter(self.model_name)
 
-        # Groq (like OpenAI) requires the literal word "json" to appear
-        # somewhere in the prompt when response_format=json_object is set,
-        # or the request is rejected outright. DeepEval's metric templates
-        # always include JSON output instructions, so this holds in
-        # practice — but fall back to an unconstrained call rather than
-        # hard-failing if some template variant ever doesn't satisfy it.
-        force_json = "json" in truncated_prompt.lower()
-
         for attempt in range(max_retries):
             try:
-                limiter.acquire(estimate_tokens(truncated_prompt))
-                request_config = {"temperature": 0.0}
-                if force_json:
-                    # DeepEval's metric templates only ASK for JSON in the
-                    # prompt text; without Groq's actual JSON mode the judge
-                    # model can drift into prose or markdown-fenced JSON,
-                    # which DeepEval's json.loads then rejects with
-                    # "Evaluation LLM outputted an invalid JSON." Forcing
-                    # json_object here (same as the QA-formatting calls)
-                    # makes Groq guarantee syntactically valid JSON.
-                    request_config["response_format"] = {"type": "json_object"}
+                limiter.acquire(estimate_tokens(prompt))
                 response = generate_content_with_key_rotation(
                     model=self.model_name,
-                    contents=truncated_prompt,
-                    config=request_config,
+                    contents=prompt,
+                    config={"temperature": 0.0, "response_format": {"type": "json_object"}},
                 )
                 content = (response.choices[0].message.content or "").strip()
-                # Extra safety net: even in JSON mode some models still wrap
-                # the object in a ```json ... ``` fence. Strip it so DeepEval's
-                # own json.loads doesn't choke on the fence markers.
-                fence_match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", content, re.DOTALL | re.IGNORECASE)
-                if fence_match:
-                    content = fence_match.group(1).strip()
+                fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", content, re.DOTALL | re.IGNORECASE)
+                if fence:
+                    content = fence.group(1).strip()
                 return content
             except Exception as e:
                 if _is_rate_limit_error(e) and attempt < max_retries - 1:
-                    # Every key in the pool was already tried and rate limited
-                    # inside generate_content_with_key_rotation — at this
-                    # point we back off for real before looping the pool again.
                     sleep_time = self._resolve_retry_delay(str(e), attempt, base_delay)
-                    print(f"[DeepEval] All keys rate limited on {self.model_name}. Retrying in {sleep_time:.1f}s...")
+                    print(f"[Eval/{LLM_PROVIDER}] Rate limit, retrying in {sleep_time:.1f}s...")
                     time.sleep(sleep_time)
-                    continue
-                if force_json and "json" in str(e).lower() and attempt < max_retries - 1:
-                    # response_format=json_object was rejected by the
-                    # provider for this particular prompt — retry once
-                    # without it rather than failing the whole evaluation.
-                    print(f"[DeepEval] json_object response_format rejected, retrying without it: {e}")
-                    force_json = False
                     continue
                 raise e
 
@@ -1751,8 +1867,8 @@ class GroqEvaluatorLLM(DeepEvalBaseLLM):
 
 # --- Vision Analysis Helper ---
 def analyze_page_image_with_vision(image_bytes: bytes) -> str:
-    """Passes page rendering image to Groq's multimodal model to describe visual content."""
-    if not groq_pool:
+    """Passes page image to the active LLM provider's vision capability."""
+    if not _llm_ready():
         return ""
 
     try:
@@ -2444,8 +2560,8 @@ async def run_deepeval_evaluation(doc_text: str, generated_json: dict, sample_js
     is intentionally NOT a per-question breakdown — that only happens later,
     once the user submits a model config and the RAG pipeline runs
     (see run_rag_pipeline / evaluate_single_question below)."""
-    if not groq_pool:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY missing for evaluation.")
+    if not _llm_ready():
+        raise HTTPException(status_code=500, detail="No LLM API key configured.")
 
     try:
         rag_eval_llm = GroqEvaluatorLLM(model_name=RAG_JUDGE_MODEL)
@@ -2646,15 +2762,6 @@ async def delete_session_document(session_id: str, document_id: str):
     }
 
 
-@app.get("/api/sessions/{session_id}/generate")
-async def generate_get_info(session_id: str):
-    return {
-        "status": "ready",
-        "message": "This endpoint accepts POST requests with multipart form data to trigger QA test case generation.",
-        "session_id": session_id,
-    }
-
-
 @app.post("/api/sessions/{session_id}/generate")
 async def generate_qa_testcases(
     session_id: str,
@@ -2727,8 +2834,8 @@ async def _generate_impl(
     if not processable_documents:
         raise HTTPException(status_code=400, detail="Upload at least one processable document. Files with 'Plans' in the filename are stored only and are not used for generation.")
 
-    if not groq_pool:
-        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+    if not _llm_ready():
+        raise HTTPException(status_code=500, detail="No LLM API key configured.")
 
     # One combined representation is used by the generation/evaluation path.
     # The golden synthesizer itself works directly from source-tagged document
@@ -3115,8 +3222,8 @@ async def re_evaluate_generated_qa(session_id: str):
 async def save_rag_config(session_id: str, config: RAGConfigRequest):
     """Saves the RAG configuration for this session without running the pipeline.
     Saving the configuration is enough to enable the document chat UI."""
-    if not groq_pool:
-        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+    if not _llm_ready():
+        raise HTTPException(status_code=500, detail="No LLM API key configured.")
 
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
@@ -3150,8 +3257,8 @@ async def run_rag_pipeline(session_id: str, config: Optional[RAGConfigRequest] =
     generated QA item itself happens to contain, since the golden dataset is
     the actual source of truth. Falls back to the generated item's own
     answer field only if no matching golden is available."""
-    if not groq_pool:
-        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+    if not _llm_ready():
+        raise HTTPException(status_code=500, detail="No LLM API key configured.")
 
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
@@ -3263,8 +3370,8 @@ async def chat_with_document(session_id: str, payload: dict):
     """Answers a document question using the session's saved RAG configuration.
     Each chat turn is stored in SQLite and, when LangSmith is configured, traced
     as a root RAG Chat trace with nested retrieval and Groq-generation spans."""
-    if not groq_pool:
-        raise HTTPException(status_code=500, detail="No GROQ_API_KEY(s) configured.")
+    if not _llm_ready():
+        raise HTTPException(status_code=500, detail="No LLM API key configured.")
 
     question = str(payload.get("question") or "").strip()
     if not question:
