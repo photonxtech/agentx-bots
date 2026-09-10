@@ -3,8 +3,8 @@ SQLAlchemy ORM models for sessions, run_configs, and run_results.
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Text, Boolean
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Text, Boolean, JSON
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
@@ -12,7 +12,7 @@ from backend.database import Base
 class Session(Base):
     __tablename__ = "sessions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False, default="Untitled Session")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     # Legacy single-document fields. Kept in sync with documents[0] so sessions
@@ -20,15 +20,15 @@ class Session(Base):
     document_filename = Column(String(500), nullable=True)
     document_path = Column(String(1000), nullable=True)
     # All uploaded documents: [{"filename": str, "path": str, "size": int}]
-    documents = Column(JSONB, nullable=True)
-    qa_json = Column(JSONB, nullable=True)  # Full generated QA test cases
+    documents = Column(JSON, nullable=True)
+    qa_json = Column(JSON, nullable=True)  # Full generated QA test cases
     # How the test set was produced (generator, model, notes) — recorded so a
     # framework test set is never confused with a fallback one.
-    qa_meta = Column(JSONB, nullable=True)
+    qa_meta = Column(JSON, nullable=True)
     # User-uploaded, manually-created Q&A pairs (seed test set). Stored
     # separately from qa_json so that re-generating Q&A never wipes the user's
     # own pairs — only the system-generated set is replaced on re-generation.
-    seed_qa_json = Column(JSONB, nullable=True)
+    seed_qa_json = Column(JSON, nullable=True)
 
     # Relationships
     run_configs = relationship("RunConfig", back_populates="session", cascade="all, delete-orphan", order_by="RunConfig.created_at")
@@ -37,8 +37,8 @@ class Session(Base):
 class RunConfig(Base):
     __tablename__ = "run_configs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # RAG configuration fields
@@ -56,7 +56,7 @@ class RunConfig(Base):
 
     # Batch-level metric scores for the whole test set, plus a "_meta" block
     # recording which models produced them and how many cases actually scored.
-    metrics = Column(JSONB, nullable=True)
+    metrics = Column(JSON, nullable=True)
 
     # LangSmith run id of the batch-summary run. Stored so human feedback can be
     # attached to the same run that carries the automated scores.
@@ -86,19 +86,19 @@ class Feedback(Base):
     """
     __tablename__ = "feedback"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    run_config_id = Column(UUID(as_uuid=True), ForeignKey("run_configs.id", ondelete="CASCADE"), nullable=False)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=True)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_config_id = Column(String(36), ForeignKey("run_configs.id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     rating = Column(String(8), nullable=False)          # "up" | "down"
     comment = Column(Text, nullable=True)
-    aspects = Column(JSONB, nullable=True)              # list of stage tags
+    aspects = Column(JSON, nullable=True)              # list of stage tags
 
     # The scores as they stood when the human judged them. Frozen so a later
     # re-run of the same config cannot rewrite what was actually being rated —
     # without this, the human-vs-machine comparison drifts silently.
-    metrics_snapshot = Column(JSONB, nullable=True)
+    metrics_snapshot = Column(JSON, nullable=True)
 
     synced_to_langsmith = Column(Boolean, nullable=False, default=False)
 
@@ -108,13 +108,13 @@ class Feedback(Base):
 class RunResult(Base):
     __tablename__ = "run_results"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    run_config_id = Column(UUID(as_uuid=True), ForeignKey("run_configs.id", ondelete="CASCADE"), nullable=False)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_config_id = Column(String(36), ForeignKey("run_configs.id", ondelete="CASCADE"), nullable=False)
 
     question = Column(Text, nullable=False)
     generated_answer = Column(Text, nullable=True)
     expected_answer = Column(Text, nullable=True)
-    metrics = Column(JSONB, nullable=True)  # e.g. {"faithfulness": 0.9, "relevancy": 0.85, ...}
+    metrics = Column(JSON, nullable=True)  # e.g. {"faithfulness": 0.9, "relevancy": 0.85, ...}
 
     # Relationships
     run_config = relationship("RunConfig", back_populates="results")

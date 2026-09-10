@@ -752,6 +752,18 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; line-height: 1.25; }
 
 .doc-row:last-child { border-bottom: none; }
 .doc-row:hover { background: var(--s2); }
+.doc-row.uploading { 
+    opacity: 0.6; 
+    animation: pulse 1.5s ease-in-out infinite; 
+}
+.doc-row.uploading .doc-remove { 
+    opacity: 0.3; 
+    pointer-events: none; 
+}
+@keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 0.8; }
+}
 
 .doc-icon { color: var(--p); }
 

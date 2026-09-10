@@ -24,7 +24,7 @@ async def run_evaluation(session_id: UUID, payload: EvaluateRequest, db: DBSessi
       5. Save batch metrics + per-case rows to Postgres
       6. Return full config + results
     """
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 

@@ -89,7 +89,7 @@ def submit_feedback(
 ):
     run_config = (
         db.query(RunConfig)
-        .filter(RunConfig.id == run_config_id, RunConfig.session_id == session_id)
+        .filter(RunConfig.id == str(run_config_id), RunConfig.session_id == str(session_id))
         .first()
     )
     if not run_config:

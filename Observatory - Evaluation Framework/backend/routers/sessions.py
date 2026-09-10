@@ -76,7 +76,7 @@ def get_session(session_id: UUID, db: DBSession = Depends(get_db)):
     session = (
         db.query(Session)
         .options(joinedload(Session.run_configs).joinedload(RunConfig.feedback))
-        .filter(Session.id == session_id)
+        .filter(Session.id == str(session_id))
         .first()
     )
     if not session:
@@ -87,7 +87,7 @@ def get_session(session_id: UUID, db: DBSession = Depends(get_db)):
 @router.delete("/{session_id}", status_code=204)
 def delete_session(session_id: UUID, db: DBSession = Depends(get_db)):
     """Delete a session and all associated data."""
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     db.delete(session)

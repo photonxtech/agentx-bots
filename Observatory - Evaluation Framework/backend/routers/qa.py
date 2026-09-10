@@ -112,11 +112,12 @@ async def upload_documents(
 ):
     """Upload one or more documents. Repeated calls append rather than replace,
     so files can be added to a session incrementally."""
-    session = db.query(Session).filter(Session.id == session_id).first()
+    # Convert UUID to string for SQLite compatibility
+    session_id_str = str(session_id)
+    session = db.query(Session).filter(Session.id == session_id_str).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
     docs = _session_documents(session)
     existing = {d["filename"] for d in docs}
     saved, skipped = [], []
@@ -129,13 +130,8 @@ async def upload_documents(
             skipped.append(f"{name} (already uploaded)")
             continue
 
-        file_path = os.path.join(UPLOAD_DIR, f"{session_id}_{name}")
         try:
-            # Read the full file content via Starlette's async read, then write
-            # to disk synchronously.  The previous approach — passing the
-            # SpooledTemporaryFile to asyncio.to_thread + shutil.copyfileobj —
-            # caused 1-2 min delays because the synchronous reads inside the
-            # thread-pool worker contend with the event loop for the GIL.
+            # Read file content - this is fast
             content = await file.read()
             file_size = len(content)
 
@@ -143,8 +139,13 @@ async def upload_documents(
                 skipped.append(f"{name} (empty)")
                 continue
 
-            with open(file_path, "wb") as out_f:
-                out_f.write(content)
+            # Write to disk asynchronously
+            file_path = os.path.join(UPLOAD_DIR, f"{session_id}_{name}")
+            os.makedirs(UPLOAD_DIR, exist_ok=True)
+            
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: open(file_path, "wb").write(content))
 
             doc = {"filename": name, "path": file_path, "size": file_size}
             docs.append(doc)
@@ -176,7 +177,7 @@ async def upload_documents(
 @router.delete("/documents/{filename}")
 def delete_document(session_id: UUID, filename: str, db: DBSession = Depends(get_db)):
     """Remove one document from the session."""
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -221,7 +222,7 @@ async def upload_seed_qa(
       JSON — array of {"question": "...", "answer": "..."} objects
       CSV  — header row with 'question' and 'answer' columns
     """
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -251,7 +252,7 @@ async def upload_seed_qa(
 @router.delete("/seed-qa")
 def delete_seed_qa(session_id: UUID, db: DBSession = Depends(get_db)):
     """Remove all uploaded seed Q&A pairs from this session."""
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -263,7 +264,7 @@ def delete_seed_qa(session_id: UUID, db: DBSession = Depends(get_db)):
 @router.get("/download-seed-qa")
 def download_seed_qa(session_id: UUID, db: DBSession = Depends(get_db)):
     """Download the uploaded seed Q&A as JSON."""
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if not session.seed_qa_json:
@@ -296,7 +297,7 @@ async def generate_qa(
     Both are expensive, hence the small default. A large request will take
     many minutes and exhaust a rate-limited tier.
     """
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     paths = document_paths(session)
@@ -362,7 +363,7 @@ async def generate_qa(
 @router.get("/download-qa")
 def download_qa(session_id: UUID, db: DBSession = Depends(get_db)):
     """Download the full Q&A JSON file (combined seed + generated)."""
-    session = db.query(Session).filter(Session.id == session_id).first()
+    session = db.query(Session).filter(Session.id == str(session_id)).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 

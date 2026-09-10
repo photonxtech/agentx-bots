@@ -16,15 +16,22 @@ Base.metadata.create_all(bind=engine)
 
 # Safe column migrations — add any new columns that don't exist yet
 def safe_migrate():
-    """Add new columns to existing tables without losing data."""
+    """Add new columns to existing tables without losing data.
+    
+    For SQLite: Base.metadata.create_all() already handles everything.
+    For PostgreSQL: Use ALTER TABLE to add missing columns to existing tables.
+    """
+    # Skip migrations for SQLite - create_all() already handled it
+    if 'sqlite' in str(engine.url):
+        return
+    
+    # PostgreSQL-specific migrations
     migrations = [
         "ALTER TABLE run_configs ADD COLUMN IF NOT EXISTS langsmith_experiment_url VARCHAR(1000)",
         "ALTER TABLE run_configs ADD COLUMN IF NOT EXISTS metrics JSONB",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS qa_meta JSONB",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS documents JSONB",
         "ALTER TABLE run_configs ADD COLUMN IF NOT EXISTS langsmith_summary_run_id VARCHAR(64)",
-        # Seed Q&A: user-uploaded manually-created Q&A pairs, kept separate
-        # from the system-generated set so re-generation never overwrites them.
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS seed_qa_json JSONB",
     ]
     with engine.connect() as conn:

@@ -394,10 +394,6 @@ async function handleFileUpload(files) {
     const list = Array.from(files || []);
     if (!list.length) return;
 
-    // Show loading immediately when files are selected (before ensureSession)
-    // Large PDF files can take time to read into memory
-    showToast(`Preparing ${list.length} file(s)…`, 'info');
-
     // A draft flow has no session yet — the first upload is what makes it real.
     try {
         await ensureSession();
@@ -406,36 +402,60 @@ async function handleFileUpload(files) {
         return;
     }
 
+    // OPTIMISTIC UI UPDATE: Show files immediately before upload completes
+    const currentDocs = (activeSessionData && activeSessionData.documents) || [];
+    const existingNames = new Set(currentDocs.map(d => d.filename));
+    const optimisticDocs = [
+        ...currentDocs,
+        ...list
+            .filter(f => !existingNames.has(f.name))
+            .map(f => ({ 
+                filename: f.name, 
+                size: f.size,
+                uploading: true
+            }))
+    ];
+    
+    // Update UI IMMEDIATELY (this should be instant)
+    renderDocumentList(optimisticDocs);
+    if (activeSessionData) {
+        activeSessionData.documents = optimisticDocs;
+    }
+    document.getElementById('btnGenerate').disabled = false;
+    
+    // Enable Continue button immediately
+    if (typeof refreshStageProgress === 'function') {
+        refreshStageProgress();
+    }
+    
+    showToast(`Uploading ${list.length} file(s)…`, 'info');
+
+    // Now do the actual upload in the background
     const formData = new FormData();
-    // Field name is `files` (plural) — the endpoint appends rather than replaces,
-    // so documents can be added to a session incrementally.
     list.forEach(f => formData.append('files', f));
 
     try {
-        const uploadStart = Date.now();
-        console.log('[UPLOAD] Starting upload of', list.length, 'file(s)');
-        showToast(`Uploading ${list.length} file(s)…`, 'info');
         const res = await fetch(`${API}/api/sessions/${activeSessionId}/upload`, {
             method: 'POST',
             body: formData,
-            // 10 min timeout for large multi-document packages
             signal: AbortSignal.timeout(600000),
         });
-        console.log('[UPLOAD] Fetch completed in', (Date.now() - uploadStart) / 1000, 'seconds');
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || `Upload failed (${res.status})`);
         }
         const result = await res.json();
-        console.log('[UPLOAD] Response parsed, updating UI...');
 
-        // Immediately apply documents BEFORE any other operations
+        // Replace optimistic docs with real server response
         applyDocuments(result.documents || []);
-        console.log('[UPLOAD] UI updated in', (Date.now() - uploadStart) / 1000, 'seconds total');
         
-        // Force UI refresh
         if (activeSessionData) {
             activeSessionData.documents = result.documents || [];
+        }
+        
+        // Update stage progress after successful upload
+        if (typeof refreshStageProgress === 'function') {
+            refreshStageProgress();
         }
 
         if (result.skipped && result.skipped.length) {
@@ -445,6 +465,8 @@ async function handleFileUpload(files) {
             showToast(`Uploaded ${result.saved.length} file(s)`, 'success');
         }
     } catch (err) {
+        // On error, revert to original documents
+        applyDocuments(currentDocs);
         if (err.name === 'TimeoutError' || err.name === 'AbortError') {
             showToast('Upload timed out - files may be too large', 'error');
         } else {
@@ -486,11 +508,10 @@ function applyDocuments(documents) {
     renderDocumentList(documents);
 
     document.getElementById('btnGenerate').disabled = documents.length === 0;
-    document.getElementById('qaPreview').style.display = 'none';
+    const qaPreview = document.getElementById('qaPreview');
+    if (qaPreview) qaPreview.style.display = 'none';
     const prov = document.getElementById('qaProvenance');
     if (prov) { prov.innerHTML = ''; prov.style.display = 'none'; }
-
-    refreshStageProgress();
 
     const idx = sessions.findIndex(s => s.id === activeSessionId);
     if (idx !== -1) {
@@ -498,7 +519,8 @@ function applyDocuments(documents) {
         sessions[idx].document_count = documents.length;
         sessions[idx].has_qa = false;
     }
-    renderSessionList();
+    // Skip renderSessionList() during uploads - not needed and can be slow
+    // renderSessionList();
 }
 
 
@@ -644,11 +666,11 @@ function renderDocumentList(documents) {
             ${total ? `<span class="doc-total">${formatBytes(total)} total</span>` : ''}
         </div>
         ${docs.map(d => `
-            <div class="doc-row">
+            <div class="doc-row${d.uploading ? ' uploading' : ''}">
                 <svg class="doc-icon" width="16" height="16" viewBox="0 0 20 20" fill="none"><rect x="3" y="2" width="14" height="16" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h4M7 13h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                 <span class="doc-name">${escapeHtml(d.filename)}</span>
-                <span class="doc-size">${formatBytes(d.size)}</span>
-                <button class="doc-remove" data-filename="${escapeHtml(d.filename)}" title="Remove this document">
+                <span class="doc-size">${d.uploading ? '⏳ uploading...' : formatBytes(d.size)}</span>
+                <button class="doc-remove" data-filename="${escapeHtml(d.filename)}" title="Remove this document" ${d.uploading ? 'disabled' : ''}>
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
                 </button>
             </div>`).join('')}`;
@@ -1452,14 +1474,6 @@ function appendRunCard(runConfig, container) {
 /** Reflect real progress on the stepper: stage 1 is complete once a test set
  *  exists, stage 2 once at least one run has been evaluated. Driven by data,
  *  not by which stage you happen to be looking at. */
-function refreshStageProgress() {
-    const hasQA = !!(activeSessionData && activeSessionData.qa_json);
-    const hasRuns = !!(activeSessionData && (activeSessionData.run_configs || []).length);
-    const s1 = document.querySelector('.step[data-step="1"]');
-    const s2 = document.querySelector('.step[data-step="2"]');
-    if (s1) s1.classList.toggle('completed', hasQA);
-    if (s2) s2.classList.toggle('completed', hasRuns);
-}
 
 
 /* ═══════════════════════════════════════
