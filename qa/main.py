@@ -135,6 +135,11 @@ from deepeval.synthesizer.types import Evolution
 
 app = FastAPI(title="QA Generator with Vision Model & Split DeepEval via Groq")
 
+@app.get("/api/status")
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "qa-generator"}
+
 def _load_groq_api_keys() -> List[str]:
     """Collects Groq API keys from any of:
     - GROQ_API_KEYS="key1,key2,key3,key4,key5" (comma-separated, recommended
@@ -2638,6 +2643,15 @@ async def delete_session_document(session_id: str, document_id: str):
         "message": "Document removed.",
         "documents": _session_document_summary(documents),
         "has_document": bool(combined_doc_text),
+    }
+
+
+@app.get("/api/sessions/{session_id}/generate")
+async def generate_get_info(session_id: str):
+    return {
+        "status": "ready",
+        "message": "This endpoint accepts POST requests with multipart form data to trigger QA test case generation.",
+        "session_id": session_id,
     }
 
 

@@ -1003,7 +1003,20 @@
                     body: formData
                 });
 
-                const data = await res.json();
+                let data = null;
+                const contentType = res.headers.get("content-type") || "";
+                if (contentType.includes("application/json")) {
+                    data = await res.json();
+                } else {
+                    const text = await res.text();
+                    if (res.status === 502) {
+                        throw new Error(`502 Bad Gateway: The server proxy or container crashed/timed out.`);
+                    } else if (res.status === 504) {
+                        throw new Error(`504 Gateway Timeout: Generation took longer than proxy timeout limit.`);
+                    } else {
+                        throw new Error(`Server returned HTTP ${res.status} (${res.statusText || 'Error'}). Check server logs.`);
+                    }
+                }
 
                 if (res.ok) {
                     currentGeneratedData = data.generated_qa;
@@ -1017,11 +1030,11 @@
                     renderEvaluation(data.deepeval);
                     document.getElementById('reEvaluateBtn').disabled = !currentGeneratedData;
                     await selectSession(activeSessionId);
-                } else if (data.partial_results_saved) {
+                } else if (data && data.partial_results_saved) {
                     // Server hit an error after saving results — reload from DB silently
                     await selectSession(activeSessionId);
                 } else {
-                    alert("Generation Failed: " + data.detail);
+                    alert("Generation Failed: " + (data ? (data.detail || JSON.stringify(data)) : res.statusText));
                 }
             } catch (err) {
                 alert("Error calling endpoint: " + err.message);
