@@ -1,0 +1,19 @@
+name: Refactor / Tech Debt
+description: Propose a code refactor or tech debt cleanup
+title: "[Refactor]: "
+labels: ["refactor", "tech-debt"]
+body:
+  - type: textarea
+    id: current-state
+    attributes:
+      label: Current State & Problem
+      description: Describe the current code or architecture that needs refactoring and why it's a problem.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: Describe what changes you plan to make to clean up the code or address the tech debt.
+    validations:
+      required: true
