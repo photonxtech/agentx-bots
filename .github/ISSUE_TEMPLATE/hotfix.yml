@@ -1,0 +1,19 @@
+name: Hotfix
+description: Urgent fix for a critical production issue
+title: "[Hotfix]: "
+labels: ["hotfix", "urgency-high"]
+body:
+  - type: textarea
+    id: impact
+    attributes:
+      label: Production Impact
+      description: Describe what is broken in production and how many users are affected.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce / Verify
+      description: How can the team quickly verify this issue and test the fix?
+    validations:
+      required: true
